@@ -18,7 +18,7 @@ Additionally, you need a Weights & Biases (wandb) account. The secltion below ex
 
 - Create or use an existing wandb account at https://wandb.ai and copy your API key (Profile → Settings → API Keys).
 - Activate the `benchmark` environment and authenticate by running `wandb login <your_api_key>` (or set `WANDB_API_KEY=<your_api_key>` in the shell before starting the script).
-- After authentication, `code/hyper_tuning.py` will create a run group per drug/target/model and store the local cache under `code/wandb/` automatically—no further setup is required.
+- After authentication, `code/hyper_tuning.py` will create a run group per drug/target/model and store the local cache under `code/wandb/` automatically, no further setup is required.
 
 ## Hyperparameter Tuning
 
