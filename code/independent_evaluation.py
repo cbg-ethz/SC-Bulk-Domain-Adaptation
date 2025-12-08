@@ -36,7 +36,7 @@ from data_utils import (  # pylint: disable=wrong-import-position
 
 # ----------------------- Constants & Defaults -----------------------
 SEED = 42
-DATA_DIR = "/cluster/work/bewi/members/mibohl/master_thesis/paper/datasets/processed"
+DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "datasets", "processed"))
 SYMBOL_ENSEMBL_MAP = os.path.join(DATA_DIR, "symbol_ensembl_map.txt")
 WANDB_PROJECT = "independent_target_evaluation"
 

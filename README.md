@@ -15,7 +15,7 @@ This will create a conda environment named `benchmark` with all the necessary pa
 Additionally, you need a Weights & Biases (wandb) account. The secltion below explains a minimal configuration needed to run the `code/hyper_tuning.py` and `code/independent_evaluation.py` script
 
 ### Weights & Biases Setup
-
+- The hyperparameter tuning script logs the results to Weights & Biases (wandb). 
 - Create or use an existing wandb account at https://wandb.ai and copy your API key (Profile → Settings → API Keys).
 - Activate the `benchmark` environment and authenticate by running `wandb login <your_api_key>` (or set `WANDB_API_KEY=<your_api_key>` in the shell before starting the script).
 - After authentication, `code/hyper_tuning.py` will create a run group per drug/target/model and store the local cache under `code/wandb/` automatically, no further setup is required.
@@ -28,11 +28,13 @@ The script takes the following arguments:
 - `--n_trials`: The number of Optuna trials.
 - `--model`: The name of the model to tune.
 
-For example, to run the hyperparameter tuning for the SCAD model on the drug Afatinib with 10 Optuna trials, you can run the following command:
+For example, to run the hyperparameter tuning for the SCAD model on the drug Afatinib with 10 hyperparameter combinations (Optuna trials), you can run the following command:
 
 ```bash
 bash -c "conda activate benchmark && python code/hyper_tuning.py --drugs Afatinib --n_trials 10 --model SCAD"
 ```
+
+You will need to download the gene expression datasets to make this script work (see below)
 
 ## Directory Structure
 

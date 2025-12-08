@@ -307,7 +307,6 @@ def _load_data_splits(path, prefix):
     if os.path.exists(x_val_path) and os.path.exists(y_val_path):
         x_val = pd.read_csv(x_val_path, index_col=0)
         y_val = pd.read_csv(y_val_path, index_col=0)
-        print(f"DEBUG: Loaded validation data from {path}")
     else:
         x_train, x_val, y_train, y_val = train_test_split(
             x_train,
@@ -316,11 +315,10 @@ def _load_data_splits(path, prefix):
             random_state=42,
             stratify=y_train["response"] if "response" in y_train.columns else y_train.iloc[:, 0],
         )
-        print(f"DEBUG: Created validation split from training data in {path}")
 
     x_test = pd.read_csv(os.path.join(path, f"{prefix}test.csv"), index_col=0)
     y_test = pd.read_csv(os.path.join(path, "y_test.csv"), index_col=0)
-    print(f"DEBUG: Loaded data from {path}")
+    print(f"Loaded data from {path}")
     return x_train, y_train, x_val, y_val, x_test, y_test
 
 

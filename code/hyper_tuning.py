@@ -141,10 +141,6 @@ DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "datase
 SYMBOL_ENSEMBL_MAP = os.path.join(DATA_DIR, "..", "reference", "symbol_ensembl_map.txt")
 WANDB_PROJECT = "hyper_tuning"
 
-# This global variable will hold the data for the current sweep run.
-CURRENT_DATA = {}
-CURRENT_MODEL_CONFIG = {}
-
 set_seed(SEED)
 
 

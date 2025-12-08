@@ -979,15 +979,6 @@ def run_scdeal_benchmark(
     }
     return results
 
-import os
-import warnings
-
-import torch
-import pytorch_lightning as pl
-from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-
-
 def run_scatd_benchmark(
     args,
     x_train_source,

@@ -63,7 +63,6 @@ def grad_reverse(x):
 class Discriminator(nn.Module):
     def __init__(self, dropout_rate, h_dim):
         super(Discriminator, self).__init__()
-        self.D1 = nn.Linear(h_dim, 1)
         self.D1 = torch.nn.Sequential(
             nn.Linear(h_dim, h_dim),
             nn.Dropout(p=dropout_rate),
