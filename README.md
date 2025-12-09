@@ -1,6 +1,8 @@
 # Domain Adaptation Benchmark Results
 
-This repository contains the code to reproduce the results of the paper M. Bohl, M. Esteban-Medina, and K. Lenhof, *Can deep learning models for drug sensitivity prediction truly transfer knowledge from bulk to single-cell data?*, **bioRxiv** (2025).
+This repository contains the code to reproduce the results of the paper
+
+M. Bohl, M. Esteban-Medina, and K. Lenhof, *Can deep learning models for drug sensitivity prediction truly transfer knowledge from bulk to single-cell data?*, **bioRxiv** (2025).
 
 
 
