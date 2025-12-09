@@ -1,6 +1,8 @@
 # Domain Adaptation Benchmark Results
 
-This repository contains the code to reproduce the results of the paper.
+This repository contains the code to reproduce the results of the paper M. Bohl, M. Esteban-Medina, and K. Lenhof, *Can deep learning models for drug sensitivity prediction truly transfer knowledge from bulk to single-cell data?*, **bioRxiv** (2025).
+
+
 
 ## Setup
 
@@ -12,7 +14,7 @@ conda env create -f environment.yaml
 ```
 
 This will create a conda environment named `benchmark` with all the necessary packages.
-Additionally, you need a Weights & Biases (wandb) account. The secltion below explains a minimal configuration needed to run the `code/hyper_tuning.py` and `code/independent_evaluation.py` script
+Additionally, you need a Weights & Biases (wandb) account. The secltion below explains a minimal configuration needed to run the `code/hyper_tuning.py` and `code/independent_evaluation.py` script.
 
 Furthermore, you need to download and unzip the datasets used in the benchmark paper from [Zenodo](https://zenodo.org/records/17868777) into `datasets/processed/`.
 
@@ -58,6 +60,6 @@ The `code/` folder gathers data processing helpers, experiment orchestration scr
 ## Downloading Data
 - To reproduce the results, you will need to download and unzip the processde datasesets used in the paper into  `datasets/processed/`. The datasets can be downloaded from [Zenodo](https://zenodo.org/records/17868777).
 - To run scATD, the pre-trained model weights (file checkpoint_fold1_epoch_30.pth) need to be downloaded from figshare (https://figshare.com/articles/software/scATD/27908847) and placed in `code/frameworks/scATD/pretrained_models/`.
-- If the original URL of the pretrained scATD model doesn't work, we provide a copy of the model weights in the repository on [Zenodo](https://zenodo.org/records/17868777)
+- If the original URL of the pretrained scATD model doesn't work, we provide a copy of the model weights in the repository on [Zenodo](https://zenodo.org/records/17868777).
 
     
