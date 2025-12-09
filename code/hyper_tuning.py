@@ -245,8 +245,9 @@ def prepare_data(drug, target_tag, all_files, data_dir):
 def main():
     """Main function to run the hyperparameter tuning sweeps using Optuna."""
     parser = argparse.ArgumentParser(description="Run hyperparameter tuning for various models.")
-    parser.add_argument("--drugs", nargs='+', default=["Etoposide", "Erlotinib", "Vorinostat", "Gefitinib", "Afatinib", "Sorafenib", "Ibrutinib", "Olaparib", "Docetaxel", "Paclitaxel", "Cisplatin"], help="List of drugs to process.")
-    parser.add_argument("--n_trials", type=int, default=100, help="Number of Optuna trials.")
+    parser.add_argument("--drugs", nargs='+', default=["Etoposide", "Erlotinib", "Vorinostat", "Gefitinib", "Afatinib", "Sorafenib", "Ibrutinib", "Olaparib", "Docetaxel", "Paclitaxel", "Cisplatin"],
+                        help="List of drugs to process. Default: All drugs.")
+    parser.add_argument("--n_trials", type=int, default=100, help="Number of Optuna trials per dataset.")
     parser.add_argument("--model", required=True, help="Name of the model to tune.")
     cli_args = parser.parse_args()
 
