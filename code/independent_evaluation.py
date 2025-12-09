@@ -77,8 +77,7 @@ class ScDealArgs:
     def __init__(self, drug_name: str) -> None:
         self.drug = drug_name
         self.result_path = (
-            "/cluster/scratch/mibohl/master_thesis/code/"
-            "replicate_and_benchmark/RF_benchmark/scDEAL_temp/"
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..",  "scDEAL_temp/"))
         )
         self.model_path = self.result_path
         self.bulk_model = self.result_path
@@ -149,8 +148,7 @@ class ScAtdArgs:
         self.hidden_dim_layer0 = 1664
         self.hidden_dim_layer_out_Z = 359
         self.pretrained_model_path = (
-            "/cluster/work/bewi/members/mibohl/master_thesis/paper/"
-            "code/frameworks/scATD/pretrained_models/"
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "frameworks/scATD/pretrained_models/"))
             "checkpoint_fold1_epoch_30.pth"
         )
         self.tune_threshold = True

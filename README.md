@@ -14,6 +14,8 @@ conda env create -f environment.yaml
 This will create a conda environment named `benchmark` with all the necessary packages.
 Additionally, you need a Weights & Biases (wandb) account. The secltion below explains a minimal configuration needed to run the `code/hyper_tuning.py` and `code/independent_evaluation.py` script
 
+Furthermore, you need to download and unzip the datasets used in the benchmark paper from [Zenodo]() into `datasets/processed/`.
+
 ### Weights & Biases Setup
 - The hyperparameter tuning script logs the results to Weights & Biases (wandb). 
 - Create or use an existing wandb account at https://wandb.ai and copy your API key (Profile → Settings → API Keys).
@@ -33,8 +35,6 @@ For example, to run the hyperparameter tuning for the SCAD model on the drug Afa
 ```bash
 bash -c "conda activate benchmark && python code/hyper_tuning.py --drugs Afatinib --n_trials 10 --model SCAD"
 ```
-
-You will need to download the gene expression datasets to make this script work (see below)
 
 ## Directory Structure
 
@@ -56,7 +56,8 @@ The `code/` folder gathers data processing helpers, experiment orchestration scr
   - `SSDA4Drug/`: Lightning module that implements, SSDA4Drug, with a shared encoder and classifier to which adversarial perturbations can be applied optionally. Training mixes supervised cross-entropy (source + few-shot target) with alternating entropy minimization and maximization on unlabeled target batches via `utils.adentropy`.
 
 ## Downloading Data
-- To reproduce the results, you will need to download the datasesets used in the paper into  `datasets/processed/` [URL to be added].
+- To reproduce the results, you will need to download and unzip the processde datasesets used in the paper into  `datasets/processed/`. The datasets can be downloaded from [Zenodo]().
 - To run scATD, the pre-trained model weights (file checkpoint_fold1_epoch_30.pth) need to be downloaded from figshare (https://figshare.com/articles/software/scATD/27908847) and placed in `code/frameworks/scATD/pretrained_models/`.
+- If the original URL of the pretrained scATD model doesn't work, we provide a copy of the model weights in the repository on [Zenodo]()
 
     
