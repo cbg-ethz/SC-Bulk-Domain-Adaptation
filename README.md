@@ -1,5 +1,5 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 # Domain Adaptation Benchmark Results
@@ -62,6 +62,18 @@ The `code/` folder gathers data processing helpers, experiment orchestration scr
   - `scATD/`: Wraps a pre-trained Dist-VAE encoder and classifier head. `setup` loads checkpoints, aligning gene vocabularies by padding/truncation; fine-tuning alternates between frozen-classifier warm-up and optional encoder unfreezing, optimizing cross-entropy plus an RBF MMD penalty via manual optimization.
   - `scDeal/`: Implements the three-stage scDEAL workflow. Autoencoder/predictor pretraining is followed by a DaNN domain adaptation step with BCE, MMD, and Louvain-cluster similarity regularizers, orchestrated through manual optimization. Utilities in `scDEAL_utils.py` construct target KNN graphs and Louvain assignments.
   - `SSDA4Drug/`: Lightning module that implements, SSDA4Drug, with a shared encoder and classifier to which adversarial perturbations can be applied optionally. Training mixes supervised cross-entropy (source + few-shot target) with alternating entropy minimization and maximization on unlabeled target batches via `utils.adentropy`.
+
+## Adding a New Benchmark Method
+
+To add another method to the benchmark:
+
+1. Add a new framework folder under `code/frameworks/<YourMethod>/` with a `main.py` entrypoint plus the model/data modules it needs (following the existing framework folders).
+2. Implement a `run_<yourmethod>_benchmark(...)` function in `code/training_utils.py` that trains/evaluates the method and returns metrics in the same structure as existing runners.
+3. Register the method in `code/hyper_tuning.py` by adding:
+   - an argument/default config container (`<YourMethod>Args`), and
+   - dispatch logic so Optuna calls your new benchmark runner.
+4. Register the method in `code/independent_evaluation.py` so it can be evaluated with the same preprocessing and independent-target setup.
+5. Reuse `code/data_utils.py` preprocessing helpers (gene mapping, normalization, splits) to keep comparisons fair and consistent across methods.
 
 ## Downloading Data
 - To reproduce the results, you will need to download and unzip the processde datasesets used in the paper into  `datasets/processed/`. The datasets can be downloaded from [Zenodo](https://zenodo.org/records/17868777).
