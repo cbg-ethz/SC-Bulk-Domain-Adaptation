@@ -1,8 +1,12 @@
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
 # Domain Adaptation Benchmark Results
 
-This repository contains the code to reproduce the results of the paper
+This repository contains the code to reproduce the results of the benchmark paper
 
-M. Bohl, M. Esteban-Medina, and K. Lenhof, *Can deep learning models for drug sensitivity prediction truly transfer knowledge from bulk to single-cell data?*, **bioRxiv** (2025).
+M. Bohl, M. Esteban-Medina, N. Beerenwinkel, and K. Lenhof, *Domain-adaptation deep learning models do not outperform simple baseline models in single-cell anti-cancer drug sensitivity prediction*, **bioRxiv** (2026).
 
 
 
