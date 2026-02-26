@@ -1,13 +1,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-green.svg)](https://www.python.org/downloads/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![bioRxiv](https://img.shields.io/badge/bioRxiv-b31b1b?style=flat&logo=biorxiv&logoColor=white)](https://www.biorxiv.org/content/10.64898/2026.02.24.707713v1)
 
 # Domain Adaptation Benchmark Results
 
 This repository contains the code to reproduce the results of the benchmark paper
 
-M. Bohl, M. Esteban-Medina, N. Beerenwinkel, and K. Lenhof, *Domain-adaptation deep learning models do not outperform simple baseline models in single-cell anti-cancer drug sensitivity prediction*, **bioRxiv** (2026).
-
+M. Bohl, M. Esteban-Medina, N. Beerenwinkel, and K. Lenhof, [*Domain-adaptation deep learning models do not outperform simple baseline models in single-cell anti-cancer drug sensitivity prediction*](https://www.biorxiv.org/content/10.64898/2026.02.24.707713v1), [**bioRxiv**](https://www.biorxiv.org/content/10.64898/2026.02.24.707713v1) (2026).
 
 
 ## Setup
