@@ -76,7 +76,7 @@ To add another method to the benchmark:
 5. Reuse `code/data_utils.py` preprocessing helpers (gene mapping, normalization, splits) to keep comparisons fair and consistent across methods.
 
 ## Downloading Data
-- To reproduce the results, you will need to download and unzip the processde datasesets used in the paper into  `datasets/processed/`. The datasets can be downloaded from [Zenodo](https://zenodo.org/records/17868777).
+- To reproduce the results, you will need to download and unzip the processed datasesets used in the paper into  `datasets/processed/`. The datasets can be downloaded from [Zenodo](https://zenodo.org/records/17868777).
 - To run scATD, the pre-trained model weights (file checkpoint_fold1_epoch_30.pth) need to be downloaded from figshare (https://figshare.com/articles/software/scATD/27908847) and placed in `code/frameworks/scATD/pretrained_models/`.
 - If the original URL of the pretrained scATD model doesn't work, we provide a copy of the model weights in the repository on [Zenodo](https://zenodo.org/records/17868777).
 
