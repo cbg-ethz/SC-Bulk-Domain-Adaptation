@@ -1,3 +1,5 @@
+# independent_evaluation.py — Evaluates tuned models on independent (hold-out) target datasets.
+
 import os
 
 os.environ["SCIPY_ARRAY_API"] = "1"  # requested env var
@@ -19,6 +21,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from training_utils import (  # pylint: disable=wrong-import-position
     run_catboost_benchmark,
     run_catboost_fewshot_baseline,
+    run_logistic_fewshot_baseline,
+    run_precise_benchmark,
     run_scad_benchmark,
     run_scdeal_benchmark,
     run_scatd_benchmark,
@@ -38,13 +42,26 @@ from data_utils import (  # pylint: disable=wrong-import-position
 SEED = 42
 DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "datasets", "processed"))
 SYMBOL_ENSEMBL_MAP = os.path.join(DATA_DIR, "symbol_ensembl_map.txt")
-WANDB_PROJECT = "independent_target_evaluation"
+WANDB_PROJECT = "independent_target_evaluation_expanded"
 
 DEFAULT_CATBOOST_PARAMS = {
     "depth": 6,
     "learning_rate": 0.03,
     "l2_leaf_reg": 3.0,
     "border_count": 254,
+}
+
+DEFAULT_MODEL_HYPERPARAMS: Dict[str, Dict[str, object]] = {
+    "CatBoost_fs": {},
+    "Logistic_fs": {
+        "C": 1000.0,
+        "l1_ratio": 0.5,
+        "max_iter": 1000,
+    },
+    "PRECISE": {
+        "method": "consensus",
+        "n_representations": 100,
+    },
 }
 
 
@@ -147,22 +164,50 @@ class ScAtdArgs:
         self.z_dim = 421
         self.hidden_dim_layer0 = 1664
         self.hidden_dim_layer_out_Z = 359
-        self.pretrained_model_path = (
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "frameworks/scATD/pretrained_models/"))
-            "checkpoint_fold1_epoch_30.pth"
+        self.pretrained_model_path = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "frameworks",
+                "scATD",
+                "pretrained_models",
+                "checkpoint_fold1_epoch_30.pth",
+            )
         )
         self.tune_threshold = True
         self.binarize_source = True
 
 
+class PreciseArgs:
+    """Container for PRECISE defaults."""
+
+    def __init__(self, drug_name: str) -> None:
+        self.drug = drug_name
+        self.data_split = "test"
+        self.mode = "PRECISE"
+        self.n_factors = 70
+        self.n_pv = 40
+        self.n_representations = 100
+        self.method = "consensus"
+        self.mean_center = False
+        self.std_unit = False
+        self.dim_reduction = "pca"
+        self.dim_reduction_target = None
+        self.l1_ratio = 0.0
+        self.n_jobs = 1
+        self.cv_fold = 10
+        self.verbose = 0
+        self.use_data = True
+
+
 # Target datasets available per drug (mirrors hyperparameter tuning script)
 TARGET_FILE_NAMES: Dict[str, list[str]] = {
-    "Cisplatin": ["GSE117872_HN120", "GSE117872_HN137", "GSE138267"],
-    "Paclitaxel": ["GSE163836_FCIBC02", "GSE131984"],
-    "Docetaxel": ["GSE140440_PC3", "GSE140440_DU145"],
-    "Sorafenib": ["SCC47", "GSE175716_HCC"],
-    "Gefitinib": ["GSE162045_PC9", "GSE202234_H1975", "GSE202234_PC9", "JHU006", "GSE112274_PC9"],
-    "Afatinib": ["GSE228154_LT", "SCC47"],
+    # "Cisplatin": ["GSE117872_HN120", "GSE117872_HN137", "GSE138267"],
+    "Paclitaxel": ["GSE131984", "GSE163836_FCIBC02"],
+    # "Docetaxel": ["GSE140440_PC3", "GSE140440_DU145"],
+    # "Sorafenib": ["SCC47", "GSE175716_HCC"],
+    # "Gefitinib": ["JHU006", "GSE112274_PC9", "GSE162045_PC9", "GSE202234_H1975", "GSE202234_PC9"],
+    # "Afatinib": ["GSE228154_LT", "SCC47"],
+    # "Erlotinib": ["GSE149214_D11_PC9", "GSE149383_PC9",]
 }
 
 
@@ -198,10 +243,32 @@ def _build_target_combinations() -> Dict[str, list[tuple[str, str]]]:
 
 DRUG_TARGETS = {drug: _unique_targets(tags) for drug, tags in TARGET_FILE_NAMES.items()}
 TARGET_COMBINATIONS = _build_target_combinations()
+TUNING_TARGET_ALIASES: Dict[tuple[str, str], str] = {
+    ("Erlotinib", "GSE149215_Erlo"): "GSE149214_D11_PC9",
+}
 
-WANDB_TUNING_PROJECT_PATH = "bohl/hyper_tuning" # change to your own wandb project path
+WANDB_TUNING_PROJECT_PATH = "bohl/hyper_tuning_expanded" # change to your own wandb project path
+# Local fallback for tuned hyperparameters, used when the W&B project lacks an entry.
+LOCAL_TUNING_CSV_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "wandb_hyperparameter_tuning_logs.csv")
+)
+# Per-model tuned hyperparameter columns (mirror trial.suggest_* in hyper_tuning.py),
+# with the cast each value needs. Lets us pull config out of the flattened CSV, where
+# config and metric columns coexist, without dragging in logged metrics like input_dim.
+CSV_HYPERPARAM_KEYS: Dict[str, Dict[str, type]] = {
+    "SCAD": {"lr": float, "dropout": float, "h_dim": int, "predictor_z_dim": int,
+             "mbS": int, "mbT": int, "lam1": float, "binarize_source": bool},
+    "SSDA4Drug": {"lr": float, "dropout": float, "encoder_h_dims": str,
+                  "predictor_h_dims": str, "batch_size": int, "lambda_ent": float,
+                  "use_epsilon": bool, "epsilon": float, "binarize_source": bool},
+    "scDEAL": {"lr": float, "dropout": float, "bulk_h_dims": str,
+               "predictor_h_dims": str, "bottleneck": int, "mmd_weight": float,
+               "binarize_source": bool},
+    "scATD": {"lr": float, "batch_size": int, "mmd_weight": float,
+              "weight_decay": float, "binarize_source": bool},
+}
 MODEL_TARGET_HYPERS: Dict[str, Dict[str, Dict[str, Dict[str, object]]]] = {}
-_MODEL_TARGET_HYPERS_PATH: Optional[str] = None
+_MODEL_TARGET_HYPERS_PATH: Optional[tuple] = None
 
 
 def _coerce_to_float(value: object) -> Optional[float]:
@@ -228,12 +295,140 @@ def _clean_config(config: Dict[str, object]) -> Dict[str, object]:
     return cleaned
 
 
+def _canonical_hyperparam_target(drug: object, target: object) -> object:
+    """Map legacy tuning-run target labels to processed dataset tags."""
+    return TUNING_TARGET_ALIASES.get((str(drug), str(target)), target)
+
+
+def _select_best_per_group(
+    candidates: Dict[tuple, list[Dict[str, object]]],
+) -> Dict[str, Dict[str, Dict[str, Dict[str, object]]]]:
+    """
+    Pick the best candidate config per (drug, target, model) group.
+
+    Selection logic:
+    1. First, select runs with the highest source_val_mcc.
+    2. If there are ties, use source_val_mcc + source_val_auc + source_val_auprc as tiebreaker.
+    3. If still tied, warn and take the first one.
+    """
+    best: Dict[str, Dict[str, Dict[str, Dict[str, object]]]] = {}
+    for (drug, target, model_name), runs_list in candidates.items():
+        # Tier 1: Find max source_val_mcc
+        max_mcc = max(r["source_val_mcc"] for r in runs_list)
+        tier1_runs = [r for r in runs_list if r["source_val_mcc"] == max_mcc]
+
+        if len(tier1_runs) == 1:
+            selected_run = tier1_runs[0]
+        else:
+            # Tier 2: Use combined metric as tiebreaker
+            tier2_scores = []
+            for r in tier1_runs:
+                auc = r["source_val_auc"] if r["source_val_auc"] is not None else 0.0
+                auprc = r["source_val_auprc"] if r["source_val_auprc"] is not None else 0.0
+                combined = max_mcc + auc + auprc
+                tier2_scores.append((combined, r))
+
+            max_combined = max(score for score, _ in tier2_scores)
+            tier2_runs = [r for score, r in tier2_scores if score == max_combined]
+
+            if len(tier2_runs) == 1:
+                selected_run = tier2_runs[0]
+            else:
+                # Tier 3: Still tied, warn and take first
+                warnings.warn(
+                    f"Multiple runs with identical metrics for {drug}/{target}/{model_name}: "
+                    f"source_val_mcc={max_mcc}, combined_score={max_combined}. "
+                    f"Taking the first one (run_id={tier2_runs[0]['run_id']})."
+                )
+                selected_run = tier2_runs[0]
+
+        best.setdefault(drug, {}).setdefault(target, {})[model_name] = selected_run["config"]
+
+    return best
+
+
+def _cast_csv_value(value: object, caster: type) -> object:
+    """Cast a CSV cell to the type the model arg expects (ints stored as floats, etc.)."""
+    if caster is bool:
+        return bool(value)
+    if caster is int:
+        return int(round(float(value)))
+    if caster is float:
+        return float(value)
+    return value  # str passes through
+
+
+def _load_csv_model_hyperparams(
+    csv_path: str,
+) -> Dict[str, Dict[str, Dict[str, Dict[str, object]]]]:
+    """Load the best tuned hyperparameters per (drug, target, model) from a local CSV.
+
+    Mirrors the W&B selection logic and applies TUNING_TARGET_ALIASES, so legacy
+    tuning labels (e.g. GSE149215_Erlo) resolve to processed dataset tags.
+    """
+    if not csv_path or not os.path.exists(csv_path):
+        return {}
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception as exc:  # pylint: disable=broad-except
+        warnings.warn(f"Failed to read local tuning CSV '{csv_path}': {exc}")
+        return {}
+
+    candidates: Dict[tuple, list[Dict[str, object]]] = {}
+    for _, row in df.iterrows():
+        drug = row.get("drug")
+        model_name = row.get("model_name")
+        target = row.get("target")
+        source_val_mcc = _coerce_to_float(row.get("source_val_mcc"))
+        if pd.isna(drug) or pd.isna(model_name) or pd.isna(target) or source_val_mcc is None:
+            continue
+        keyspec = CSV_HYPERPARAM_KEYS.get(str(model_name))
+        if keyspec is None:
+            continue
+        target = _canonical_hyperparam_target(drug, target)
+        if drug not in TARGET_COMBINATIONS or target not in DRUG_TARGETS.get(drug, []):
+            continue
+
+        config: Dict[str, object] = {}
+        for col, caster in keyspec.items():
+            val = row.get(col)
+            if val is None or pd.isna(val):
+                continue
+            config[col] = _cast_csv_value(val, caster)
+
+        key = (str(drug), target, str(model_name))
+        candidates.setdefault(key, []).append({
+            "config": config,
+            "source_val_mcc": source_val_mcc,
+            "source_val_auc": _coerce_to_float(row.get("source_val_auc")),
+            "source_val_auprc": _coerce_to_float(row.get("source_val_auprc")),
+            "run_id": row.get("name", "unknown"),
+        })
+
+    return _select_best_per_group(candidates)
+
+
+def _merge_hyperparams(
+    base: Dict[str, Dict[str, Dict[str, Dict[str, object]]]],
+    override: Dict[str, Dict[str, Dict[str, Dict[str, object]]]],
+) -> Dict[str, Dict[str, Dict[str, Dict[str, object]]]]:
+    """Deep-merge two hyperparameter maps at the (drug, target, model) leaf; override wins."""
+    merged = {
+        drug: {target: dict(models) for target, models in targets.items()}
+        for drug, targets in base.items()
+    }
+    for drug, targets in override.items():
+        for target, models in targets.items():
+            merged.setdefault(drug, {}).setdefault(target, {}).update(models)
+    return merged
+
+
 def _fetch_best_model_hyperparams(
     project_path: str,
 ) -> Dict[str, Dict[str, Dict[str, Dict[str, object]]]]:
     """
     Fetch the best hyperparameters per (drug, target, model) from W&B.
-    
+
     Selection logic:
     1. First, select runs with the highest source_val_mcc.
     2. If there are ties, use source_val_mcc + source_val_auc + source_val_auprc as tiebreaker.
@@ -288,6 +483,7 @@ def _fetch_best_model_hyperparams(
             or source_val_mcc is None
         ):
             continue
+        target = _canonical_hyperparam_target(drug, target)
         if drug not in TARGET_COMBINATIONS or target not in DRUG_TARGETS.get(drug, []):
             continue
 
@@ -310,41 +506,7 @@ def _fetch_best_model_hyperparams(
             "run_id": getattr(run, "id", "unknown"),
         })
 
-    # Select best run for each (drug, target, model) using tiered logic
-    best: Dict[str, Dict[str, Dict[str, Dict[str, object]]]] = {}
-    for (drug, target, model_name), runs_list in candidates.items():
-        # Tier 1: Find max source_val_mcc
-        max_mcc = max(r["source_val_mcc"] for r in runs_list)
-        tier1_runs = [r for r in runs_list if r["source_val_mcc"] == max_mcc]
-        
-        if len(tier1_runs) == 1:
-            selected_run = tier1_runs[0]
-        else:
-            # Tier 2: Use combined metric as tiebreaker
-            tier2_scores = []
-            for r in tier1_runs:
-                auc = r["source_val_auc"] if r["source_val_auc"] is not None else 0.0
-                auprc = r["source_val_auprc"] if r["source_val_auprc"] is not None else 0.0
-                combined = max_mcc + auc + auprc
-                tier2_scores.append((combined, r))
-            
-            max_combined = max(score for score, _ in tier2_scores)
-            tier2_runs = [r for score, r in tier2_scores if score == max_combined]
-            
-            if len(tier2_runs) == 1:
-                selected_run = tier2_runs[0]
-            else:
-                # Tier 3: Still tied, warn and take first
-                warnings.warn(
-                    f"Multiple runs with identical metrics for {drug}/{target}/{model_name}: "
-                    f"source_val_mcc={max_mcc}, combined_score={max_combined}. "
-                    f"Taking the first one (run_id={tier2_runs[0]['run_id']})."
-                )
-                selected_run = tier2_runs[0]
-        
-        best.setdefault(drug, {}).setdefault(target, {})[model_name] = selected_run["config"]
-
-    return best
+    return _select_best_per_group(candidates)
 
 
 def _ensure_model_hyperparams_loaded() -> Dict[str, Dict[str, Dict[str, Dict[str, object]]]]:
@@ -352,9 +514,13 @@ def _ensure_model_hyperparams_loaded() -> Dict[str, Dict[str, Dict[str, Dict[str
     Lazily load tuned hyperparameters, caching them for the configured W&B project.
     """
     global MODEL_TARGET_HYPERS, _MODEL_TARGET_HYPERS_PATH  # pylint: disable=global-statement
-    if not MODEL_TARGET_HYPERS or _MODEL_TARGET_HYPERS_PATH != WANDB_TUNING_PROJECT_PATH:
-        MODEL_TARGET_HYPERS = _fetch_best_model_hyperparams(WANDB_TUNING_PROJECT_PATH)
-        _MODEL_TARGET_HYPERS_PATH = WANDB_TUNING_PROJECT_PATH
+    cache_key = (WANDB_TUNING_PROJECT_PATH, LOCAL_TUNING_CSV_PATH)
+    if not MODEL_TARGET_HYPERS or _MODEL_TARGET_HYPERS_PATH != cache_key:
+        csv_hypers = _load_csv_model_hyperparams(LOCAL_TUNING_CSV_PATH)
+        wandb_hypers = _fetch_best_model_hyperparams(WANDB_TUNING_PROJECT_PATH)
+        # W&B takes precedence where present; the local CSV fills any gaps.
+        MODEL_TARGET_HYPERS = _merge_hyperparams(csv_hypers, wandb_hypers)
+        _MODEL_TARGET_HYPERS_PATH = cache_key
     return MODEL_TARGET_HYPERS
 
 
@@ -420,17 +586,10 @@ def prepare_data(
     y_target_series = y_target_raw.iloc[:, 0]
     y_independent_series = y_independent_raw.iloc[:, 0]
 
-    # Preprocess expression matrices
-    X_source = normalize_cpm_log1p_if_counts(
-        drop_all_nan_and_deduplicate(convert_to_ensembl(X_source_raw.copy())), "X_source"
-    )
-    X_target = normalize_cpm_log1p_if_counts(
-        drop_all_nan_and_deduplicate(convert_to_ensembl(X_target_raw.copy())), "X_target"
-    )
-    X_independent = normalize_cpm_log1p_if_counts(
-        drop_all_nan_and_deduplicate(convert_to_ensembl(X_independent_raw.copy())),
-        "X_independent",
-    )
+    # Preprocess expression matrices up to feature alignment.
+    X_source = drop_all_nan_and_deduplicate(convert_to_ensembl(X_source_raw.copy()))
+    X_target = drop_all_nan_and_deduplicate(convert_to_ensembl(X_target_raw.copy()))
+    X_independent = drop_all_nan_and_deduplicate(convert_to_ensembl(X_independent_raw.copy()))
 
     # Align genes across all three cohorts
     (X_source, X_target, X_independent), common_genes = intersect_genes(
@@ -441,6 +600,11 @@ def prepare_data(
             f"[{drug}] No common genes among source, target, and independent datasets. Skipping."
         )
         return None
+
+    # Normalize after intersection so all cohorts use the same CPM feature space.
+    X_source = normalize_cpm_log1p_if_counts(X_source, "X_source")
+    X_target = normalize_cpm_log1p_if_counts(X_target, "X_target")
+    X_independent = normalize_cpm_log1p_if_counts(X_independent, "X_independent")
 
     # Split datasets
     X_source_train, X_source_test, y_source_train, y_source_test = train_test_split(
@@ -546,7 +710,8 @@ def build_args(model_name: str, drug: str, target_tag: str) -> Optional[Dict[str
     """Construct the argument dictionary for a model/target combination."""
     hyper_lookup = _ensure_model_hyperparams_loaded()
     model_hypers = hyper_lookup.get(drug, {}).get(target_tag, {}).get(model_name)
-    if model_hypers is None:
+    default_hypers = DEFAULT_MODEL_HYPERPARAMS.get(model_name)
+    if model_hypers is None and default_hypers is None:
         return None
 
     if model_name == "SCAD":
@@ -557,6 +722,8 @@ def build_args(model_name: str, drug: str, target_tag: str) -> Optional[Dict[str
         args = vars(ScDealArgs(drug))
     elif model_name == "scATD":
         args = vars(ScAtdArgs(drug))
+    elif model_name == "PRECISE":
+        args = vars(PreciseArgs(drug))
     elif model_name == "CatBoost_source_only":
         args = {
             "model_type": model_name,
@@ -565,16 +732,20 @@ def build_args(model_name: str, drug: str, target_tag: str) -> Optional[Dict[str
         }
     elif model_name == "CatBoost_fs":
         args = {"drug": drug}
+    elif model_name == "Logistic_fs":
+        args = {"drug": drug}
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
+    effective_hypers = dict(default_hypers or {})
+    effective_hypers.update(model_hypers or {})
     if model_name == "CatBoost_source_only":
-        cat_params = model_hypers.get("catboost_params", model_hypers)
+        cat_params = effective_hypers.get("catboost_params", effective_hypers)
         if not isinstance(cat_params, dict):
             cat_params = {}
         args["catboost_params"] = {**args.get("catboost_params", {}), **cat_params}
     else:
-        args.update(model_hypers)
+        args.update(effective_hypers)
     return args
 
 
@@ -622,6 +793,8 @@ def evaluate_model(
         return run_scdeal_benchmark(args_dict, **data_bundle, seed=SEED)
     if model_name == "scATD":
         return run_scatd_benchmark(args_dict, **data_bundle, seed=SEED)
+    if model_name == "PRECISE":
+        return run_precise_benchmark(args_dict, **data_bundle, seed=SEED)
     if model_name == "CatBoost_source_only":
         return run_catboost_benchmark(
             args_dict.get("model_type", model_name),
@@ -654,17 +827,35 @@ def evaluate_model(
             y_target_independent=data_bundle.get("y_target_independent"),
             seed=SEED,
         )
+    if model_name == "Logistic_fs":
+        return run_logistic_fewshot_baseline(
+            data_bundle["x_val_source"],
+            data_bundle["y_val_source"],
+            data_bundle["x_test_source"],
+            data_bundle["y_test_source"],
+            data_bundle["x_train_target"],
+            data_bundle["y_train_target"],
+            data_bundle["x_test_target"],
+            data_bundle["y_test_target"],
+            X_target_independent=data_bundle.get("X_target_independent"),
+            y_target_independent=data_bundle.get("y_target_independent"),
+            c=float(args_dict.get("C", DEFAULT_MODEL_HYPERPARAMS["Logistic_fs"]["C"])),
+            l1_ratio=float(args_dict.get("l1_ratio", DEFAULT_MODEL_HYPERPARAMS["Logistic_fs"]["l1_ratio"])),
+            max_iter=int(args_dict.get("max_iter", DEFAULT_MODEL_HYPERPARAMS["Logistic_fs"]["max_iter"])),
+            seed=SEED,
+        )
     raise ValueError(f"Unsupported model: {model_name}")
 
 
 def main() -> None:
+    global WANDB_TUNING_PROJECT_PATH, LOCAL_TUNING_CSV_PATH, MODEL_TARGET_HYPERS, _MODEL_TARGET_HYPERS_PATH  # pylint: disable=global-statement
     parser = argparse.ArgumentParser(
         description="Evaluate domain adaptation models on independent targets."
     )
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["CatBoost_source_only", "CatBoost_fs" ,"SCAD", "scDEAL", "SSDA4Drug", "scATD" ],
+        default=["PRECISE"],#, , ,Logistic_fs "CatBoost_fs", "SCAD", "scDEAL", "SSDA4Drug", "scATD"], #"CatBoost_source_only"
         help="Models to evaluate.",
     )
     parser.add_argument(
@@ -683,20 +874,26 @@ def main() -> None:
         default="bohl/hyper_tuning_v5",
         help="Weights & Biases project path (<entity>/<project>) containing tuned hyperparameters.",
     )
+    parser.add_argument(
+        "--tuning-csv",
+        default=LOCAL_TUNING_CSV_PATH,
+        help="Local CSV of tuned hyperparameters, used as a fallback when W&B lacks an entry. "
+        "Pass '' to disable.",
+    )
     args = parser.parse_args()
 
     initialize_symbol_map(SYMBOL_ENSEMBL_MAP)
     set_seed(SEED)
 
-    global WANDB_TUNING_PROJECT_PATH, MODEL_TARGET_HYPERS, _MODEL_TARGET_HYPERS_PATH  # pylint: disable=global-statement
     WANDB_TUNING_PROJECT_PATH = args.tuning_project
+    LOCAL_TUNING_CSV_PATH = args.tuning_csv
     MODEL_TARGET_HYPERS = {}
     _MODEL_TARGET_HYPERS_PATH = None
     hyper_lookup = _ensure_model_hyperparams_loaded()
     if not hyper_lookup:
         warnings.warn(
-            f"No tuned hyperparameters found in W&B project '{WANDB_TUNING_PROJECT_PATH}'. "
-            "Model evaluation will be skipped."
+            f"No tuned hyperparameters found in W&B project '{WANDB_TUNING_PROJECT_PATH}' "
+            f"or local CSV '{LOCAL_TUNING_CSV_PATH}'. Model evaluation will be skipped."
         )
         return
 
@@ -722,16 +919,13 @@ def main() -> None:
                 continue
 
             for model_name in args.models:
-                if model_name not in hyper_lookup.get(drug, {}).get(target_tag, {}):
-                    warnings.warn(
-                        f"[{drug}] Hyperparameters missing for {model_name} on target {target_tag}. Skipping model."
-                    )
-                    continue
-
                 model_args = build_args(model_name, drug, target_tag)
                 if model_args is None:
+                    available = sorted(hyper_lookup.get(drug, {}).get(target_tag, {}).keys())
                     warnings.warn(
-                        f"[{drug}] Failed to build args for {model_name} on {target_tag}. Skipping."
+                        f"No tuned hyperparameters for model={model_name}, drug={drug}, "
+                        f"target={target_tag}. Tuned models available for this target: "
+                        f"{available or 'none'}. Skipping."
                     )
                     continue
 

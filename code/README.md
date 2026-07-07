@@ -6,8 +6,13 @@ This folder contains data preprocessing utilities, benchmark runners, hyperparam
 
 - `data_utils.py`: Shared data pipeline utilities (gene-ID conversion, normalization, split loading, dataloader creation, and source/target dataset preparation).
 - `training_utils.py`: Shared training/evaluation logic for all benchmarks (metrics, threshold tuning, logging, and per-framework run functions).
-- `hyper_tuning.py`: Main Optuna/W&B hyperparameter tuning script for SCAD, scDEAL, SSDA4Drug, scATD, and CatBoost baselines.
+- `hyper_tuning.py`: Main Optuna/W&B hyperparameter tuning script for SCAD, scDEAL, SSDA4Drug, scATD, PRECISE, and CatBoost baselines.
 - `independent_evaluation.py`: Evaluates tuned models on independent (hold-out) target datasets
+- `retrain_selected_hparams.py`: Retrains each framework with its selected best hyperparameters (from the W&B sweep) and logs final benchmark results.
+
+## Classical domain adaptation
+
+- `PRECISE`: non-neural source-to-target domain adaptation baseline installed from `NKI-CCB/PRECISE`; `n_factors=70` and `n_pv=40` stay fixed, `method` is tuned over `consensus` and `elasticnet`, `n_representations` is tuned over 50, 100, and 150, and `l1_ratio` is tuned only for `elasticnet`.
 
 
 ## Framework implementations

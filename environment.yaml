@@ -23,3 +23,4 @@ dependencies:
   - umap-learn=0.5.9.post2
   - wandb=0.22.0
   - igraph
+  - pip

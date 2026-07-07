@@ -20,6 +20,13 @@ conda env create -f environment.yaml
 ```
 
 This will create a conda environment named `benchmark` with all the necessary packages.
+PRECISE is installed from `NKI-CCB/PRECISE` with `--no-deps`, so the unrelated
+PyPI package named `precise` is not used and the benchmark environment keeps its
+pinned numpy/pandas/scikit-learn versions:
+
+```bash
+pip install --no-deps -r requirements-precise.txt
+```
 Additionally, you need a Weights & Biases (wandb) account. The secltion below explains a minimal configuration needed to run the `code/hyper_tuning.py` and `code/independent_evaluation.py` script.
 
 Furthermore, you need to download and unzip the datasets used in the benchmark paper from [Zenodo](https://zenodo.org/records/17868777) into `datasets/processed/`.
@@ -57,6 +64,7 @@ The `code/` folder gathers data processing helpers, experiment orchestration scr
 - `code/training_utils.py`: Shared training helpers and baselines. It sets global seeds, defines callbacks (e.g., delayed early stopping), computes model metrics, and wraps framework-specific runners (`run_scad_benchmark`, `run_scdeal_benchmark`, etc.) alongside classical baselines such as CatBoost and RandomForest.
 - `code/hyper_tuning.py`: Runs Optuna sweeps per drug/domain and logs trials to Weights & Biases. It standardizes preprocessing, constructs framework argument objects, and dispatches to the runners above.
 - `code/independent_evaluation.py`: Repeats the preprocessing pipeline for held-out target datasets and launches framework benchmarks/few-shot baselines with consistent defaults, enabling cross-dataset comparisons.
+- `PRECISE`: Classical source-to-target domain adaptation baseline installed from `NKI-CCB/PRECISE`; tuning keeps `n_factors=70` and `n_pv=40` fixed, searches `method` over `consensus` and `elasticnet`, searches `n_representations` over 50, 100, and 150, and tunes `l1_ratio` only for `elasticnet`.
 - `code/frameworks/`: Houses the Lightning implementations of each domain adaptation method:
   - `SCAD/`: Domain-adversarial Lightning module that couples a shared encoder, response predictor, and gradient-reversal discriminator with a tunable weight lambda.
   - `scATD/`: Wraps a pre-trained Dist-VAE encoder and classifier head. `setup` loads checkpoints, aligning gene vocabularies by padding/truncation; fine-tuning alternates between frozen-classifier warm-up and optional encoder unfreezing, optimizing cross-entropy plus an RBF MMD penalty via manual optimization.

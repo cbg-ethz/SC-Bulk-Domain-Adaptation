@@ -1,3 +1,6 @@
+# hyper_tuning.py — Optuna/W&B hyperparameter search for the SCAD, scDEAL, SSDA4Drug,
+# scATD, PRECISE, and CatBoost drug-response benchmarks.
+
 import os
 os.environ["SCIPY_ARRAY_API"] = "1"  # requested env var
 
@@ -6,12 +9,12 @@ import numpy as np
 import warnings
 import pandas as pd
 import argparse
+from contextlib import contextmanager
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import wandb
 import optuna
 from types import SimpleNamespace
-from optuna.integration.wandb import WeightsAndBiasesCallback
 
 
 
@@ -116,18 +119,41 @@ class ScAtdArgs:
         self.binarize_source = True
 
 
+class PreciseArgs:
+    def __init__(self, drug_name):
+        self.drug = drug_name
+        self.data_split = "test"
+        self.mode = "PRECISE"
+        self.n_factors = 70
+        self.n_pv = 40
+        self.n_representations = 100
+        self.method = "consensus"
+        self.mean_center = False
+        self.std_unit = False
+        self.dim_reduction = "pca"
+        self.dim_reduction_target = None
+        self.l1_ratio = 0.0
+        self.n_jobs = 1
+        self.cv_fold = 10
+        self.verbose = 0
+        self.use_data = True
+
+
 # Add project root to system path for module imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
-from training_utils import (
+from training_utils import (  # noqa: E402
     run_scad_benchmark,
     run_ssda4drug_benchmark,
     run_scdeal_benchmark,
     run_scatd_benchmark,
+    run_precise_benchmark,
     run_catboost_benchmark,
     run_catboost_fewshot_baseline,
+    run_logistic_source_only_baseline,
+    run_logistic_fewshot_baseline,
     set_seed,
 )
-from data_utils import (
+from data_utils import (  # noqa: E402
     convert_to_ensembl,
     drop_all_nan_and_deduplicate,
     normalize_cpm_log1p_if_counts,
@@ -139,13 +165,15 @@ from data_utils import (
 SEED = 42
 DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "datasets", "processed"))
 SYMBOL_ENSEMBL_MAP = os.path.join(DATA_DIR, "..", "reference", "symbol_ensembl_map.txt")
-WANDB_PROJECT = "hyper_tuning"
+WANDB_PROJECT = "hyper_tuning_expanded"
+N_RANDOM_CELL_SEEDS = 3
+RANDOM_CELL_SEED_MODELS = {"SSDA4Drug", "CatBoost_fs", "Logistic_fs"}
 
 set_seed(SEED)
 
 
 # ----------------------- Data Preparation -----------------------
-def prepare_data(drug, target_tag, all_files, data_dir):
+def prepare_data(drug, target_tag, all_files, data_dir, split_seed):
     """Loads, preprocesses, and splits the data for a given drug and target."""
     
     # Find source files
@@ -164,7 +192,6 @@ def prepare_data(drug, target_tag, all_files, data_dir):
     # Process source data
     X_source = convert_to_ensembl(X_source_raw.copy())
     X_source = drop_all_nan_and_deduplicate(X_source)
-    X_source = normalize_cpm_log1p_if_counts(X_source, "X_source")
 
     # Find and load target files
     X_target_files = [f for f in all_files if f.startswith("X_") and drug in f and target_tag in f]
@@ -180,7 +207,6 @@ def prepare_data(drug, target_tag, all_files, data_dir):
     # Preprocessing
     X_target = convert_to_ensembl(X_target_raw.copy())
     X_target = drop_all_nan_and_deduplicate(X_target)
-    X_target = normalize_cpm_log1p_if_counts(X_target, "X_target")
 
 
     # intersect genes with source
@@ -191,22 +217,26 @@ def prepare_data(drug, target_tag, all_files, data_dir):
         print("No common genes found. Skipping this target pair.")
         return None
 
+    # CPM normalization must happen after feature intersection so library sizes
+    # are computed over the exact shared feature space used by the models.
+    X_source = normalize_cpm_log1p_if_counts(X_source, "X_source")
+    X_target = normalize_cpm_log1p_if_counts(X_target, "X_target")
 
     # Data splitting
     # source: train 64%, val 16%, test 20%
     X_source_train, X_source_test, y_source_train, y_source_test = train_test_split(
-        X_source, y_source, test_size=0.2, random_state=SEED, stratify=y_source_bin
+        X_source, y_source, test_size=0.2, random_state=split_seed, stratify=y_source_bin
     )
     # for stratification
     y_source_train_bin = y_source_train >= 0.5
 
     X_source_train, X_source_val, y_source_train, y_source_val = train_test_split(
-        X_source_train, y_source_train, test_size=0.2, random_state=SEED, stratify=y_source_train_bin
+        X_source_train, y_source_train, test_size=0.2, random_state=split_seed, stratify=y_source_train_bin
     )
 
     # target: train 80%, test 20%
     X_target_train, X_target_test, y_target_train, y_target_test = train_test_split(
-        X_target, y_target_series, test_size=0.2, random_state=SEED, stratify=y_target_series
+        X_target, y_target_series, test_size=0.2, random_state=split_seed, stratify=y_target_series
     )
 
     # DEBUG statements
@@ -228,7 +258,7 @@ def prepare_data(drug, target_tag, all_files, data_dir):
     X_target_train = pd.DataFrame(source_scaler.transform(X_target_train.reindex(columns=expected_cols)), index=X_target_train.index, columns=expected_cols)
     X_target_test = pd.DataFrame(source_scaler.transform(X_target_test.reindex(columns=expected_cols)), index=X_target_test.index, columns=expected_cols)
 
-    # The benchmark functions expect it, Independent target data logic so we pass None.
+    # The benchmark functions expects independent target data logic so we pass None.
     return {
         "x_train_source": X_source_train, "y_train_source": y_source_train,
         "x_val_source": X_source_val, "y_val_source": y_source_val,
@@ -240,14 +270,41 @@ def prepare_data(drug, target_tag, all_files, data_dir):
     }
 
 
+def average_results(results_list):
+    """Average numeric result values from repeated seeded benchmark runs."""
+    averaged = {}
+    for key, first_value in results_list[0].items():
+        if isinstance(first_value, dict):
+            averaged[key] = {
+                metric: float(np.mean([results[key][metric] for results in results_list]))
+                for metric, value in first_value.items()
+                if isinstance(value, (int, float, np.number))
+            }
+        elif isinstance(first_value, (int, float, np.number)):
+            averaged[key] = float(np.mean([results[key] for results in results_list]))
+
+    return averaged
+
+
+@contextmanager
+def suppress_wandb_log_calls():
+    """Prevent inner seeded runs from logging directly to the active W&B run."""
+    original_log = wandb.log
+    wandb.log = lambda *args, **kwargs: None
+    try:
+        yield
+    finally:
+        wandb.log = original_log
+
+
 
 # ----------------------- Main Execution -----------------------
 def main():
     """Main function to run the hyperparameter tuning sweeps using Optuna."""
     parser = argparse.ArgumentParser(description="Run hyperparameter tuning for various models.")
-    parser.add_argument("--drugs", nargs='+', default=["Etoposide", "Erlotinib", "Vorinostat", "Gefitinib", "Afatinib", "Sorafenib", "Ibrutinib", "Olaparib", "Docetaxel", "Paclitaxel", "Cisplatin"],
+    parser.add_argument("--drugs", nargs='+', default=["SN-38", "Paclitaxel", "Afatinib", "Sorafenib", "Olaparib",],
                         help="List of drugs to process. Default: All drugs.")
-    parser.add_argument("--n_trials", type=int, default=100, help="Number of Optuna trials per dataset.")
+    parser.add_argument("--n_trials", type=int, default=50, help="Number of Optuna trials per dataset.")
     parser.add_argument("--model", required=True, help="Name of the model to tune.")
     cli_args = parser.parse_args()
 
@@ -256,17 +313,23 @@ def main():
     model_name = cli_args.model
 
     target_file_names = {
-        "Cisplatin":   ["GSE138267", "GSE117872_HN120", "GSE117872_HN137"], 
-        "Paclitaxel": [ "GSE163836_FCIBC02", "GSE131984"], 
-        "Ibrutinib": ["GSE111014_CLL"],
-        "Olaparib": ["GSE228382"],
-        "Vorinostat": ["SCC47"],
+        "Cisplatin": ["GSE117872_HN120","GSE117872_HN137", "GSE138267"], 
+        "Paclitaxel": ["GSE163836", "GSE131984"],
+        "Ibrutinib": ["GSE111014"],
+        "Dabrafenib": ["GSE164614"],
+        "Olaparib": ["GSE223003"],
+        "Vorinostat": ["JHU006"],
         "Etoposide": ["GSE149383_PC9"],
-        "Erlotinib": ["GSE149383_PC9"],
-        "Docetaxel": ["GSE140440_DU145", "GSE140440_PC3"],
-        "Sorafenib":  ["GSE175716_HCC", "SCC47"], 
-        "Gefitinib": [ "GSE162045_PC9", "GSE202234_H1975", "GSE202234_PC9", "JHU006", "GSE112274_PC9"], 
-        "Afatinib": ["GSE228154_LT","SCC47"] 
+        "Erlotinib": ["GSE149383_PC9", "GSE149214"],
+        "Docetaxel": ["GSE140440_DU145", "GSE140440_PC3"], 
+        "Sorafenib":  ["SCC47", "GSE175716"], 
+        "Gefitinib": [ "JHU006", "GSE112274_PC9", "GSE162045_PC9", "GSE202234_H1975", "GSE202234_PC9"],  
+        "Afatinib": ["SCC47", "GSE228154"], 
+        "Alectinib": ["GSE223779"],
+        "Crizotinib": ["GSE223779"],
+        "Palbociclib": ["GSE131984"],
+        "Gemcitabine": ["GSE186960"],
+        "SN-38": ["GSE174376"],
     }
 
     for drug in cli_args.drugs:
@@ -274,197 +337,251 @@ def main():
         all_files = [f for f in os.listdir(DATA_DIR) if drug in f and f.endswith(".csv")]
 
         for target_tag in target_file_names.get(drug, []):
-            print(f'\n--- Preparing data for target: {target_tag} ---')
-            data = prepare_data(drug, target_tag, all_files, DATA_DIR)
-            if data is None:
-                print(f'Skipping {drug} with target {target_tag} due to data issues.')
-                continue
-            print(f'\n--- Starting Tuning for {model_name} on {drug}::{target_tag} ---')
+            for split in range(1, 4):
+                split_seed = SEED + split - 1
+                print(f'\n--- Preparing data for target: {target_tag}, split: {split} ---')
+                data = prepare_data(drug, target_tag, all_files, DATA_DIR, split_seed)
+                if data is None:
+                    print(f'Skipping {drug} with target {target_tag}, split {split} due to data issues.')
+                    continue
+                print(f'\n--- Starting Tuning for {model_name} on {drug}::{target_tag}, split {split} ---')
 
-            def objective(trial: optuna.Trial) -> float:
-                monitor_split = "source_val"
-                monitor_metric = "mcc"
+                def objective(trial: optuna.Trial) -> float:
+                    monitor_split = "source_val"
+                    monitor_metric = "mcc"
 
-                if model_name == "SCAD":
-                    args = ScadArgs(drug)
-                    args.lr = trial.suggest_float("lr", 1e-4, 5e-2, log=True)
-                    args.dropout = trial.suggest_float("dropout", 0.1, 0.5)
-                    args.h_dim = trial.suggest_int("h_dim", 512, 1024, step=128)
-                    args.predictor_z_dim = trial.suggest_int("predictor_z_dim", 128, 256, step=64)
-                    args.mbS = trial.suggest_categorical("mbS", [8, 16, 32, 64])
-                    args.mbT = trial.suggest_categorical("mbT", [8, 16, 32, 64])
-                    args.lam1 = trial.suggest_float("lam1", 0.1, 10.0, log=True)
-                    args.binarize_source = trial.suggest_categorical("binarize_source", [True, False])
-                    benchmark_func = run_scad_benchmark
-                
-                elif model_name == "SSDA4Drug":
-                    args = Ssda4DrugArgs(drug)
-                    args.lr = trial.suggest_float("lr", 5e-5, 1e-2, log=True)
-                    args.dropout = trial.suggest_float("dropout", 0.1, 0.5)
-                    args.encoder_h_dims = trial.suggest_categorical("encoder_h_dims", ["256,128", "512,256", "1024,512"])
-                    args.predictor_h_dims = trial.suggest_categorical("predictor_h_dims", ["64,32", "128,64", "256,128"])
-                    args.batch_size = trial.suggest_categorical("batch_size", [64, 128, 256])
-                    args.lambda_ent = trial.suggest_float("lambda_ent", 0.05, 0.2)
-                    use_epsilon = trial.suggest_categorical("use_epsilon", [True, False])
-                    if use_epsilon:
-                        args.epsilon = trial.suggest_float("epsilon", 1e-4, 1e-2, log=True)
-                    else:
-                        args.epsilon = 0.0
-                    args.binarize_source = trial.suggest_categorical("binarize_source", [True, False])
-                    benchmark_func = run_ssda4drug_benchmark
-
-                elif model_name == "scDEAL":
-                    args = ScDealArgs(drug)
-                    args.lr = trial.suggest_float("lr", 1e-3, 1e-1, log=True)
-                    args.dropout = trial.suggest_float("dropout", 0.1, 0.5)
-                    args.bulk_h_dims = trial.suggest_categorical("bulk_h_dims", ["256,256", "512,256", "512,512"])
-                    args.predictor_h_dims = trial.suggest_categorical("predictor_h_dims", ["128,64", "64,32", "32,16", "16,8"])
-                    args.bottleneck = trial.suggest_int("bottleneck", 64, 512, step=64)
-                    args.mmd_weight = trial.suggest_float("mmd_weight", 0.1, 1.0, log=False)
-                    args.binarize_source = trial.suggest_categorical("binarize_source", [True, False])
-                    benchmark_func = run_scdeal_benchmark
-
-                elif model_name == "scATD":
-                    args = ScAtdArgs(drug)
-                    args.lr = trial.suggest_float("lr", 1e-5, 5e-2, log=True)
-                    args.batch_size = trial.suggest_categorical("batch_size", [32, 64, 128, 256])
-                    args.mmd_weight = trial.suggest_float("mmd_weight", 0.1, 1.0, log=False)
-                    args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
-                    args.binarize_source = trial.suggest_categorical("binarize_source", [True, False])
-                    benchmark_func = run_scatd_benchmark
-
-
-                elif model_name == "CatBoost_fs":
-                    args = SimpleNamespace()
-
-                    def benchmark_func(x_train_source, y_train_source, x_val_source, y_val_source, x_test_source, y_test_source, x_train_target, y_train_target, x_test_target, y_test_target, X_target_independent, y_target_independent, target_file, independent_target_file, trial=None, seed=SEED, **kwargs):
-                        cur_seed = seed if trial is None else seed + trial.number
-                        return run_catboost_fewshot_baseline(
-                            x_val_source,
-                            y_val_source,
-                            x_test_source,
-                            y_test_source,
-                            x_train_target,
-                            y_train_target,
-                            x_test_target,
-                            y_test_target,
-                            seed=cur_seed,
-                        )
-
-                    monitor_split = "target_test"
-                    monitor_metric = "auc"
-                
-                elif model_name.startswith("CatBoost"):
-                    class CatBoostArgs:
-                        def __init__(self, drug_name, model_name):
-                            self.drug = drug_name
-                            self.data_split = "test"
-                            self.mode = model_name
-                            self.tune_threshold = True 
-
-                    args = CatBoostArgs(drug, model_name)
-                    # The benchmark function will handle the trial suggestions.
-                    benchmark_func = run_catboost_benchmark
+                    if model_name == "SCAD":
+                        args = ScadArgs(drug)
+                        args.lr = trial.suggest_float("lr", 1e-4, 5e-2, log=True)
+                        args.dropout = trial.suggest_float("dropout", 0.1, 0.5)
+                        args.h_dim = trial.suggest_int("h_dim", 512, 1024, step=128)
+                        args.predictor_z_dim = trial.suggest_int("predictor_z_dim", 128, 256, step=64)
+                        args.mbS = trial.suggest_categorical("mbS", [8, 16, 32, 64])
+                        args.mbT = trial.suggest_categorical("mbT", [8, 16, 32, 64])
+                        args.lam1 = trial.suggest_float("lam1", 0.1, 10.0, log=True)
+                        args.binarize_source = trial.suggest_categorical("binarize_source", [True, False])
+                        benchmark_func = run_scad_benchmark
                     
-                else:
-                    raise ValueError(f"Unknown model: {model_name}")
-
-                args_dict = vars(args)
-                # For CatBoost, we also need to pass the model_type
-                if model_name.startswith("CatBoost"):
-                    args_dict["model_type"] = model_name
-
-                wandb_config = dict(trial.params)
-                if hasattr(args, "binarize_source"):
-                    wandb_config.setdefault("binarize_source", args.binarize_source)
-
-                with wandb.init(
-                    project=WANDB_PROJECT,
-                    group=f"{drug}_{target_tag}_{model_name}",
-                    job_type="optuna_trial",
-                    config=wandb_config,
-                    reinit=True,
-                ) as run:
-                    try:
-                        if model_name.startswith("CatBoost"):
-                            results = benchmark_func(**args_dict, **data, trial=trial, seed=SEED)
+                    elif model_name == "SSDA4Drug":
+                        args = Ssda4DrugArgs(drug)
+                        args.lr = trial.suggest_float("lr", 5e-5, 1e-2, log=True)
+                        args.dropout = trial.suggest_float("dropout", 0.1, 0.5)
+                        args.encoder_h_dims = trial.suggest_categorical("encoder_h_dims", ["256,128", "512,256", "1024,512"])
+                        args.predictor_h_dims = trial.suggest_categorical("predictor_h_dims", ["64,32", "128,64", "256,128"])
+                        args.batch_size = trial.suggest_categorical("batch_size", [64, 128, 256])
+                        args.lambda_ent = trial.suggest_float("lambda_ent", 0.05, 0.2)
+                        use_epsilon = trial.suggest_categorical("use_epsilon", [True, False])
+                        if use_epsilon:
+                            args.epsilon = trial.suggest_float("epsilon", 1e-4, 1e-2, log=True)
                         else:
-                            results = benchmark_func(args_dict, **data, trial=trial, seed=SEED)
-                    except ValueError as exc:
-                        warning_msg = f"{model_name} failed: {exc}"
-                        print(warning_msg)
-                        run.log({"error": warning_msg})
-                        return -1.0
+                            args.epsilon = 0.0
+                        args.binarize_source = trial.suggest_categorical("binarize_source", [True, False])
+                        benchmark_func = run_ssda4drug_benchmark
 
-                    to_log = {
-                        "drug": drug,
-                        "target": target_tag,
-                        "model_name": model_name,
-                        **{
-                            f"{split}_{metric}": value
-                            for split, metrics in results.items()
-                            if isinstance(metrics, dict)
-                            for metric, value in metrics.items()
-                        },
+                    elif model_name == "scDEAL":
+                        args = ScDealArgs(drug)
+                        args.lr = trial.suggest_float("lr", 1e-3, 1e-1, log=True)
+                        args.dropout = trial.suggest_float("dropout", 0.1, 0.5)
+                        args.bulk_h_dims = trial.suggest_categorical("bulk_h_dims", ["256,256", "512,256", "512,512"])
+                        args.predictor_h_dims = trial.suggest_categorical("predictor_h_dims", ["128,64", "64,32", "32,16", "16,8"])
+                        args.bottleneck = trial.suggest_int("bottleneck", 64, 512, step=64)
+                        args.mmd_weight = trial.suggest_float("mmd_weight", 0.1, 1.0, log=False)
+                        args.binarize_source = trial.suggest_categorical("binarize_source", [True, False])
+                        benchmark_func = run_scdeal_benchmark
+
+                    elif model_name == "scATD":
+                        args = ScAtdArgs(drug)
+                        args.lr = trial.suggest_float("lr", 1e-5, 5e-2, log=True)
+                        args.batch_size = trial.suggest_categorical("batch_size", [32, 64, 128, 256])
+                        args.mmd_weight = trial.suggest_float("mmd_weight", 0.1, 1.0, log=False)
+                        args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
+                        args.binarize_source = trial.suggest_categorical("binarize_source", [True, False])
+                        benchmark_func = run_scatd_benchmark
+
+                    elif model_name == "PRECISE":
+                        args = PreciseArgs(drug)
+                        args.method = trial.suggest_categorical("method", ["consensus", "elasticnet"])
+                        args.n_representations = trial.suggest_categorical("n_representations", [50, 100, 150])
+                        if args.method == "elasticnet":
+                            args.l1_ratio = trial.suggest_categorical("l1_ratio", [0.0, 0.5, 1.0])
+                        else:
+                            args.l1_ratio = 0.0
+                        benchmark_func = run_precise_benchmark
+
+
+                    elif model_name == "CatBoost_fs":
+                        args = SimpleNamespace()
+
+                        def benchmark_func(x_train_source, y_train_source, x_val_source, y_val_source, x_test_source, y_test_source, x_train_target, y_train_target, x_test_target, y_test_target, X_target_independent, y_target_independent, target_file, independent_target_file, trial=None, seed=SEED, **kwargs):
+                            return run_catboost_fewshot_baseline(
+                                x_val_source,
+                                y_val_source,
+                                x_test_source,
+                                y_test_source,
+                                x_train_target,
+                                y_train_target,
+                                x_test_target,
+                                y_test_target,
+                                seed=seed,
+                            )
+
+                        monitor_split = "target_test" # doesnt matter since we're not tuning this anyways
+                        monitor_metric = "auc" # doesnt matter since we're not tuning this anyways
+
+                    elif model_name == "Logistic_fs":
+                        args = SimpleNamespace(C=1000.0, l1_ratio=0.5, max_iter=1000)
+
+                        def benchmark_func(args_dict, x_train_source, y_train_source, x_val_source, y_val_source, x_test_source, y_test_source, x_train_target, y_train_target, x_test_target, y_test_target, X_target_independent, y_target_independent, target_file, independent_target_file, trial=None, seed=SEED, **kwargs):
+                            return run_logistic_fewshot_baseline(
+                                x_val_source, y_val_source, x_test_source, y_test_source, x_train_target, y_train_target, x_test_target, y_test_target,
+                                X_target_independent, y_target_independent, c=args_dict["C"], l1_ratio=args_dict["l1_ratio"], max_iter=args_dict["max_iter"], seed=seed,
+                            )
+
+                        monitor_split = "target_test" # doesnt matter since we're not tuning this anyways
+                        monitor_metric = "auc" # doesnt matter since we're not tuning this anyways
+
+                    elif model_name == "Logistic_source_only":
+                        args = SimpleNamespace(C=trial.suggest_float("C", 1e-4, 1e2, log=True), l1_ratio=trial.suggest_float("l1_ratio", 0.0, 1.0))
+
+                        def benchmark_func(args_dict, x_train_source, y_train_source, x_val_source, y_val_source, x_test_source, y_test_source, x_train_target, y_train_target, x_test_target, y_test_target, X_target_independent, y_target_independent, target_file, independent_target_file, trial=None, seed=SEED, **kwargs):
+                            return run_logistic_source_only_baseline(
+                                x_train_source, y_train_source, x_val_source, y_val_source, x_test_source, y_test_source, x_test_target, y_test_target,
+                                X_target_independent, y_target_independent, c=args_dict["C"], l1_ratio=args_dict["l1_ratio"], seed=seed,
+                            )
+                    
+                    elif model_name.startswith("CatBoost"):
+                        class CatBoostArgs:
+                            def __init__(self, drug_name, model_name):
+                                self.drug = drug_name
+                                self.data_split = "test"
+                                self.mode = model_name
+                                self.tune_threshold = True 
+
+                        args = CatBoostArgs(drug, model_name)
+                        # The benchmark function will handle the trial suggestions.
+                        benchmark_func = run_catboost_benchmark
+                        
+                    else:
+                        raise ValueError(f"Unknown model: {model_name}")
+
+                    args_dict = vars(args)
+                    # For CatBoost, we also need to pass the model_type
+                    if model_name.startswith("CatBoost"):
+                        args_dict["model_type"] = model_name
+
+                    wandb_config = dict(trial.params)
+                    wandb_config["split"] = split
+                    if model_name == "Logistic_fs":
+                        wandb_config.update({"C": args.C, "l1_ratio": args.l1_ratio})
+                    if hasattr(args, "binarize_source"):
+                        wandb_config.setdefault("binarize_source", args.binarize_source)
+
+                    with wandb.init(
+                        project=WANDB_PROJECT,
+                        group=f"{drug}_{target_tag}_{model_name}_split{split}",
+                        job_type="optuna_trial",
+                        config=wandb_config,
+                        reinit=True,
+                    ) as run:
+                        try:
+                            if model_name in RANDOM_CELL_SEED_MODELS:
+                                seed_results = []
+                                for seed_idx in range(N_RANDOM_CELL_SEEDS):
+                                    eval_seed = split_seed + trial.number * N_RANDOM_CELL_SEEDS + seed_idx
+                                    seed_args_dict = dict(args_dict)
+                                    seed_args_dict["log_to_wandb"] = False
+                                    with suppress_wandb_log_calls():
+                                        if model_name.startswith("CatBoost"):
+                                            seed_results.append(benchmark_func(**seed_args_dict, **data, trial=trial, seed=eval_seed))
+                                        else:
+                                            seed_results.append(benchmark_func(seed_args_dict, **data, trial=trial, seed=eval_seed))
+                                results = average_results(seed_results)
+                            elif model_name.startswith("CatBoost"):
+                                results = benchmark_func(**args_dict, **data, trial=trial, seed=split_seed)
+                            else:
+                                results = benchmark_func(args_dict, **data, trial=trial, seed=split_seed)
+                        except ValueError as exc:
+                            warning_msg = f"{model_name} failed: {exc}"
+                            print(warning_msg)
+                            run.log({"error": warning_msg})
+                            return -1.0
+
+                        to_log = {
+                            "drug": drug,
+                            "target": target_tag,
+                            "model_name": model_name,
+                            "split": split,
+                            **{
+                                f"{split}_{metric}": value
+                                for split, metrics in results.items()
+                                if isinstance(metrics, dict)
+                                for metric, value in metrics.items()
+                            },
+                        }
+                        run.log(to_log)
+
+                        return results.get(monitor_split, {}).get(monitor_metric, -1.0)
+
+                study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=split_seed), study_name=f"{drug}_{target_tag}_{model_name}_split{split}")
+                # Initial starting point (baseline) parameters
+                if model_name == "SCAD":
+                    initial_params = {
+                        "lr": 0.0005,
+                        "dropout": 0.5,
+                        "h_dim": 1024,
+                        "predictor_z_dim": 128,
+                        "mbS": 8,
+                        "mbT": 8,
+                        "lam1": 1,
+                        "binarize_source": True
                     }
-                    run.log(to_log)
+                elif model_name == "SSDA4Drug":
+                    initial_params = {
+                        "lr": 0.001,
+                        "dropout": 0.3,
+                        "encoder_h_dims": "512,256",
+                        "predictor_h_dims": "64,32",
+                        "batch_size": 128,
+                        "use_epsilon": False,
+                        "lambda_ent": 0.1,
+                        "binarize_source": True
+                    }
+                elif model_name == "scDEAL":
+                    initial_params = {
+                        "lr": 0.01,
+                        "dropout": 0.3,
+                        "bulk_h_dims": "512,256",
+                        "predictor_h_dims": "64,32",
+                        "bottleneck": 128,
+                        "mmd_weight": 0.25,
+                        "binarize_source": True
+                    }
+                elif model_name == "scATD":
+                    initial_params = {
+                        "lr": 0.001,
+                        "mmd_weight": 1,
+                        "batch_size": 128,
+                        "weight_decay": 0.001,
+                        "binarize_source": True,
+                    }
+                elif model_name == "PRECISE":
+                    initial_params = {
+                        "method": "consensus",
+                        "n_representations": 100,
+                    }
+                elif model_name.startswith("CatBoost") and model_name != "CatBoost_fs":
+                    # For CatBoost, we use the default parameter values as initial starting point
+                    initial_params = {"depth": 6, "learning_rate": 0.03, "l2_leaf_reg": 3, "border_count": 254}
+                else:
+                    initial_params = {}
 
-                    return results.get(monitor_split, {}).get(monitor_metric, -1.0)
+                if initial_params:
+                    study.enqueue_trial(initial_params)
 
-            study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=SEED), study_name=f"{drug}_{target_tag}_{model_name}")
-            # Initial starting point (baseline) parameters
-            if model_name == "SCAD":
-                initial_params = {
-                    "lr": 0.0005,
-                    "dropout": 0.5,
-                    "h_dim": 1024,
-                    "predictor_z_dim": 128,
-                    "mbS": 8,
-                    "mbT": 8,
-                    "lam1": 1,
-                    "binarize_source": True
-                }
-            elif model_name == "SSDA4Drug":
-                initial_params = {
-                    "lr": 0.001,
-                    "dropout": 0.3,
-                    "encoder_h_dims": "512,256",
-                    "predictor_h_dims": "64,32",
-                    "batch_size": 128,
-                    "use_epsilon": False,
-                    "lambda_ent": 0.1,
-                    "binarize_source": True
-                }
-            elif model_name == "scDEAL":
-                initial_params = {
-                    "lr": 0.01,
-                    "dropout": 0.3,
-                    "bulk_h_dims": "512,256",
-                    "predictor_h_dims": "64,32",
-                    "bottleneck": 128,
-                    "mmd_weight": 0.25,
-                    "binarize_source": True
-                }
-            elif model_name == "scATD":
-                initial_params = {
-                    "lr": 0.001,
-                    "mmd_weight": 1,
-                    "batch_size": 128,
-                    "weight_decay": 0.001,
-                    "binarize_source": True,
-                }
-            elif model_name.startswith("CatBoost"):
-                # For CatBoost, we use the default parameter values as initial starting point
-                initial_params = {"depth": 6, "learning_rate": 0.03, "l2_leaf_reg": 3, "border_count": 254}
-            else:
-                initial_params = {}
+                n_trials = 1 if model_name in {"CatBoost_fs", "Logistic_fs"} else cli_args.n_trials
+                study.optimize(objective, n_trials=n_trials)
 
-            if initial_params:
-                study.enqueue_trial(initial_params)
-
-            study.optimize(objective, n_trials=cli_args.n_trials)
-
-            print(f"--- Finished study for {model_name} on {drug}::{target_tag} ---")
+                print(f"--- Finished study for {model_name} on {drug}::{target_tag}, split {split} ---")
 
 if __name__ == "__main__":
     main()

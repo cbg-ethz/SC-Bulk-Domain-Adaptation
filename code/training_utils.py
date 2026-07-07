@@ -1,3 +1,6 @@
+# training_utils.py — Shared training/evaluation logic for all benchmarks: metrics,
+# threshold tuning, logging, and per-framework run functions.
+
 # Standard library imports
 import os
 import random
@@ -16,6 +19,8 @@ import torch
 import torch.nn as nn
 import wandb
 from catboost import CatBoostClassifier
+from precise import DrugResponsePredictor
+from precise.pipeline_routine import FlowProjector, GeodesicMatrixComputer
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
@@ -30,6 +35,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 from typing import TYPE_CHECKING
@@ -421,6 +427,163 @@ def evaluate_sklearn_model(model, X_source_test, y_source_test, X_target_test, y
     return results
 
 
+def run_logistic_source_only_baseline(
+    x_train_source,
+    y_train_source,
+    x_val_source,
+    y_val_source,
+    x_test_source,
+    y_test_source,
+    x_test_target,
+    y_test_target,
+    X_target_independent=None,
+    y_target_independent=None,
+    c: float = 1.0,
+    l1_ratio: float = 0.5,
+    seed: int = 42,
+) -> Dict[str, Dict[str, float]]:
+    """Train elastic-net logistic regression on source data only."""
+    y_train_bin = (y_train_source >= 0.5).astype(int)
+    model = LogisticRegression(C=c, penalty="elasticnet", solver="saga", l1_ratio=l1_ratio, class_weight="balanced", max_iter=5000, random_state=seed)
+    model.fit(x_train_source, y_train_bin)
+    tuned_threshold, _ = _tune_threshold_GB(model, x_val_source, y_val_source)
+
+    source_val_metrics = calculate_all_metrics(_y_to_vector(y_val_source >= 0.5), model.predict_proba(x_val_source)[:, 1], threshold=tuned_threshold)
+    source_test_metrics = calculate_all_metrics(_y_to_vector(y_test_source >= 0.5), model.predict_proba(x_test_source)[:, 1], threshold=tuned_threshold)
+    target_test_metrics = calculate_all_metrics(_y_to_vector(y_test_target >= 0.5), model.predict_proba(x_test_target)[:, 1], threshold=tuned_threshold)
+
+    independent_metrics: Dict[str, float] = {}
+    if X_target_independent is not None and y_target_independent is not None:
+        independent_metrics = calculate_all_metrics(_y_to_vector(y_target_independent >= 0.5), model.predict_proba(X_target_independent)[:, 1], threshold=tuned_threshold)
+
+    return {"source_val": source_val_metrics, "source_test": source_test_metrics, "target_test": target_test_metrics, "independent_target_test": independent_metrics, "selected_threshold": tuned_threshold}
+
+
+def run_precise_benchmark(
+    args,
+    x_train_source,
+    y_train_source,
+    x_val_source,
+    y_val_source,
+    x_test_source,
+    y_test_source,
+    x_train_target,
+    y_train_target,
+    x_test_target,
+    y_test_target,
+    X_target_independent,
+    y_target_independent,
+    target_file,
+    independent_target_file,
+    seed=42,
+    trial=None,
+):
+    """Run PRECISE as a classical source-to-target domain adaptation baseline."""
+
+    # PRECISE 1.3 does not store these BaseEstimator __init__ parameters
+    # on FlowProjector/GeodesicMatrixComputer, which breaks sklearn>=1.7 clone().
+    # We run with both flags false, matching the existing benchmark preprocessing.
+    for projector_cls in (FlowProjector, GeodesicMatrixComputer):
+        if not hasattr(projector_cls, "mean_center"):
+            projector_cls.mean_center = False
+        if not hasattr(projector_cls, "std_unit"):
+            projector_cls.std_unit = False
+
+    set_seed(seed)
+
+    n_factors = int(args.get("n_factors", 70))
+    n_pv = int(args.get("n_pv", 40))
+    requested_cv_fold = int(args.get("cv_fold", 10))
+    effective_cv_fold = min(requested_cv_fold, x_train_source.shape[0])
+    if effective_cv_fold < 2:
+        raise ValueError("PRECISE needs at least two source samples for cross-validation.")
+    min_source_cv_train = x_train_source.shape[0] - int(np.ceil(x_train_source.shape[0] / effective_cv_fold))
+    max_factors = min(min_source_cv_train, x_train_target.shape[0], x_train_source.shape[1])
+    if max_factors < 2:
+        raise ValueError("PRECISE needs at least two available factors after source/target alignment.")
+    effective_n_factors = min(n_factors, max_factors)
+    effective_n_pv = min(n_pv, effective_n_factors)
+
+    if wandb.run is not None:
+        wandb.config.update(
+            {
+                "precise_effective_n_factors": effective_n_factors,
+                "precise_effective_n_pv": effective_n_pv,
+                "precise_effective_cv_fold": effective_cv_fold,
+            },
+            allow_val_change=True,
+        )
+
+    use_data = bool(args.get("use_data", True))
+    model = DrugResponsePredictor(
+        n_representations=int(args.get("n_representations", 100)),
+        method=args.get("method", "consensus"),
+        mean_center=bool(args.get("mean_center", False)),
+        std_unit=bool(args.get("std_unit", False)),
+        n_factors=effective_n_factors,
+        n_pv=effective_n_pv,
+        dim_reduction=args.get("dim_reduction", "pca"),
+        dim_reduction_target=args.get("dim_reduction_target", None),
+        l1_ratio=float(args.get("l1_ratio", 0.0)),
+        source_data=None if use_data else x_train_source.to_numpy(dtype=np.float64),
+        target_data=x_train_target.to_numpy(dtype=np.float64),
+        n_jobs=int(args.get("n_jobs", 1)),
+    )
+    model.cv_fold = effective_cv_fold
+    model.verbose = int(args.get("verbose", 0))
+    model.fit(
+        x_train_source.to_numpy(dtype=np.float64),
+        _y_to_vector(y_train_source).astype(np.float64),
+        use_data=use_data,
+    )
+
+    class _PreciseProbAdapter:
+        def __init__(self, fitted_model):
+            self.fitted_model = fitted_model
+
+        def predict_proba(self, X):
+            values = X.to_numpy(dtype=np.float64) if hasattr(X, "to_numpy") else np.asarray(X, dtype=np.float64)
+            scores = np.asarray(self.fitted_model.predict(values)).ravel()
+            scores = np.nan_to_num(scores, nan=0.5, posinf=1.0, neginf=0.0)
+            scores = np.clip(scores, 0.0, 1.0)
+            return np.column_stack([1.0 - scores, scores])
+
+    adapter = _PreciseProbAdapter(model)
+    tuned_threshold, _ = _tune_threshold_GB(adapter, x_val_source, y_val_source)
+
+    source_val_metrics = calculate_all_metrics(
+        _y_to_vector(y_val_source >= 0.5),
+        adapter.predict_proba(x_val_source)[:, 1],
+        threshold=tuned_threshold,
+    )
+    source_test_metrics = calculate_all_metrics(
+        _y_to_vector(y_test_source >= 0.5),
+        adapter.predict_proba(x_test_source)[:, 1],
+        threshold=tuned_threshold,
+    )
+    target_test_metrics = calculate_all_metrics(
+        _y_to_vector(y_test_target >= 0.5),
+        adapter.predict_proba(x_test_target)[:, 1],
+        threshold=tuned_threshold,
+    )
+
+    independent_metrics: Dict[str, float] = {}
+    if X_target_independent is not None and y_target_independent is not None:
+        independent_metrics = calculate_all_metrics(
+            _y_to_vector(y_target_independent >= 0.5),
+            adapter.predict_proba(X_target_independent)[:, 1],
+            threshold=tuned_threshold,
+        )
+
+    return {
+        "source_val": source_val_metrics,
+        "source_test": source_test_metrics,
+        "target_test": target_test_metrics,
+        "independent_target_test": independent_metrics,
+        "selected_threshold": tuned_threshold,
+    }
+
+
 def train_AE_model(
     net,
     data_loaders={},
@@ -797,7 +960,7 @@ def run_scdeal_benchmark(
         y_train_source,
         args['batch_size'],
         shuffle=True,
-        drop_last=False,
+        drop_last=True,
         balancing_strategy=args.get('balancing_strategy'),
         seed=seed,
     )
@@ -807,7 +970,7 @@ def run_scdeal_benchmark(
         y_train_target,
         args['batch_size'],
         shuffle=True,
-        drop_last=False,
+        drop_last=True,
         balancing_strategy=args.get('balancing_strategy'),
         seed=seed,
     )
@@ -1283,7 +1446,8 @@ def run_catboost_benchmark(
                 params[extra_key] = extra_value
 
     if wandb.run:
-        wandb.config.update(params)
+        hidden_config_keys = {"eval_metric", "task_type", "verbose"}
+        wandb.config.update({key: value for key, value in params.items() if key not in hidden_config_keys})
 
     model = CatBoostClassifier(**params)
     
@@ -1361,10 +1525,11 @@ def run_ssda4drug_benchmark(args, x_train_source, y_train_source, x_val_source, 
     if trial:
         run_name += f"_trial_{trial.number}"
 
+    log_to_wandb = args.get("log_to_wandb", True)
     wandb_logger = WandbLogger(
-        name=run_name, 
-        config=args
-    )
+        name=run_name,
+        config=args,
+    ) if log_to_wandb else False
     
     patience = args.get('patience', 10)
     early_stop_callback = EarlyStopping(monitor="val/loss", min_delta=0.00, patience=patience, verbose=True, mode="min")
@@ -1557,7 +1722,7 @@ def run_catboost_fewshot_baseline(
         y_independent_series = None
 
     y_train_bin = (y_train_series >= 0.5).astype(int)
-    y_test_bin = (y_test_series >= 0.5).astype(int)
+    # y_test_bin = (y_test_series >= 0.5).astype(int)
 
     class0_idx = y_train_bin[y_train_bin == 0].index.tolist()
     class1_idx = y_train_bin[y_train_bin == 1].index.tolist()
@@ -1605,6 +1770,80 @@ def run_catboost_fewshot_baseline(
     }
     
 
+    return results
+
+
+def run_logistic_fewshot_baseline(
+    x_val_source: pd.DataFrame,
+    y_val_source: pd.Series,
+    x_test_source: pd.DataFrame,
+    y_test_source: pd.Series,
+    x_train_target: pd.DataFrame,
+    y_train_target: pd.Series,
+    x_test_target: pd.DataFrame,
+    y_test_target: pd.Series,
+    X_target_independent: Optional[pd.DataFrame] = None,
+    y_target_independent: Optional[pd.Series] = None,
+    c: float = 1.0,
+    l1_ratio: float = 0.5,
+    max_iter: int = 500,
+    seed: int = 42,
+) -> Dict[str, Dict[str, float]]:
+    """Train elastic-net logistic regression on 3 positive and 3 negative target samples."""
+    rng = np.random.default_rng(seed)
+
+    if isinstance(y_train_target, pd.DataFrame):
+        y_train_series = y_train_target.iloc[:, 0]
+    elif isinstance(y_train_target, pd.Series):
+        y_train_series = y_train_target.copy()
+    else:
+        y_train_series = pd.Series(y_train_target, index=x_train_target.index)
+
+    if isinstance(y_target_independent, pd.DataFrame):
+        y_independent_series = y_target_independent.iloc[:, 0]
+    elif isinstance(y_target_independent, pd.Series):
+        y_independent_series = y_target_independent.copy()
+    else:
+        y_independent_series = None
+
+    y_train_bin = (y_train_series >= 0.5).astype(int)
+
+    class0_idx = y_train_bin[y_train_bin == 0].index.tolist()
+    class1_idx = y_train_bin[y_train_bin == 1].index.tolist()
+
+    if len(class0_idx) < 3 or len(class1_idx) < 3:
+        raise ValueError("Not enough samples per class to build the 3-shot logistic baseline.")
+
+    fewshot_idx = rng.choice(class0_idx, 3, replace=False).tolist()
+    fewshot_idx += rng.choice(class1_idx, 3, replace=False).tolist()
+
+    x_fewshot = x_train_target.loc[fewshot_idx]
+    y_fewshot = y_train_bin.loc[fewshot_idx]
+
+    fs = LogisticRegression(C=c, penalty="elasticnet", solver="saga", l1_ratio=l1_ratio, class_weight="balanced", max_iter=max_iter, random_state=seed)
+    fs.fit(x_fewshot, y_fewshot)
+
+    tuned_threshold = 0.5
+
+    source_val_metrics = calculate_all_metrics(_y_to_vector(y_val_source >= 0.5), fs.predict_proba(x_val_source)[:, 1], threshold=tuned_threshold)
+    source_test_metrics = calculate_all_metrics(_y_to_vector(y_test_source >= 0.5), fs.predict_proba(x_test_source)[:, 1], threshold=tuned_threshold)
+    target_test_metrics = calculate_all_metrics(_y_to_vector(y_test_target >= 0.5), fs.predict_proba(x_test_target)[:, 1], threshold=tuned_threshold)
+
+    independent_metrics: Dict[str, float] = {}
+    if X_target_independent is not None and y_independent_series is not None:
+        independent_metrics = calculate_all_metrics(
+            _y_to_vector(y_independent_series >= 0.5),
+            fs.predict_proba(X_target_independent)[:, 1],
+            threshold=tuned_threshold,
+        )
+
+    results = {
+        "source_val": source_val_metrics,
+        "source_test": source_test_metrics,
+        "target_test": target_test_metrics,
+        "independent_target_test": independent_metrics,
+        "selected_threshold": tuned_threshold
+    }
     return results
 
 

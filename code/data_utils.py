@@ -1,3 +1,6 @@
+# data_utils.py — Shared data-pipeline utilities: gene-ID conversion, normalization,
+# split loading, dataloader creation, and source/target dataset preparation.
+
 # Standard library imports
 import os
 import random
@@ -14,9 +17,7 @@ import torch
 from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import TomekLinks
 from sklearn.model_selection import train_test_split
-from sklearn.neighbors import KernelDensity
 from sklearn.preprocessing import StandardScaler
-from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 
 # Module constants and globals
@@ -47,12 +48,24 @@ def intersect_genes(*dfs: pd.DataFrame) -> tuple[list[pd.DataFrame], list[str]]:
 
 
 def normalize_cpm_log1p_if_counts(df: pd.DataFrame, df_name: str) -> pd.DataFrame:
-    """Detect raw counts, apply CPM normalisation and log1p; otherwise return dataframe unchanged."""
+    """Require count-like input, then apply CPM normalisation and log1p."""
     df = df.apply(pd.to_numeric, errors="coerce")
-    is_counts = (df.min().min() >= 0) and (df.max().max() > 20)
-    if not is_counts:
-        print(f"{df_name} appears already normalized/scaled; skipping CPM.")
-        return df
+    min_value = df.min().min()
+    max_value = df.max().max()
+    values = df.to_numpy(dtype=np.float64, copy=False)
+    finite_values = values[np.isfinite(values)]
+
+    if min_value < 0:
+        raise ValueError(f"{df_name} contains negative values and cannot be CPM-normalized as raw counts.")
+
+    # Log1p expression matrices are non-negative, small-valued, and usually fractional.
+    if finite_values.size:
+        fractional_ratio = np.mean(np.abs(finite_values - np.round(finite_values)) > 1e-3)
+        if max_value <= 20 and fractional_ratio > 0.2:
+            raise ValueError(
+                f"{df_name} appears log-transformed. Provide raw counts; preprocessing will intersect genes, "
+                "apply CPM normalization, then log1p-scale the data."
+            )
 
     print(f"Applying CPM and log1p to {df_name}...")
     row_sums = df.sum(axis=1).replace(0, np.nan)
@@ -675,8 +688,9 @@ def prepare_source_target_datasets(
 
     The preprocessing mirrors the logic used in `hyper_tuning_original.py`:
       * map gene symbols to Ensembl IDs (when possible)
-      * drop all-NaN / duplicate columns and normalise via CPM+log1p when counts are detected
+      * drop all-NaN / duplicate columns
       * align source/target on the shared gene vocabulary
+      * normalise intersected raw counts via CPM+log1p
       * create train/val/test splits with stratification when labels are binary
       * fit a StandardScaler on source training data and apply it to every split
     """
@@ -689,9 +703,6 @@ def prepare_source_target_datasets(
     target_features_df = drop_all_nan_and_deduplicate(
         convert_to_ensembl(_read_table(Path(target_features)))
     )
-
-    source_features_df = normalize_cpm_log1p_if_counts(source_features_df, "source_features")
-    target_features_df = normalize_cpm_log1p_if_counts(target_features_df, "target_features")
 
     source_labels_series = _maybe_invert(
         _coerce_label_series(_read_table(Path(source_labels))),
@@ -710,6 +721,9 @@ def prepare_source_target_datasets(
 
     source_features_df = source_aligned
     target_features_df = target_aligned
+
+    source_features_df = normalize_cpm_log1p_if_counts(source_features_df, "source_features")
+    target_features_df = normalize_cpm_log1p_if_counts(target_features_df, "target_features")
 
     source_test_fraction = float(np.clip(source_test_fraction, 1e-6, 0.9))
     target_test_fraction = float(np.clip(target_test_fraction, 1e-6, 0.9))
@@ -794,11 +808,11 @@ def prepare_source_target_datasets(
         x_test_source=X_source_test.astype(np.float32),
         y_test_source=y_source_test,
         x_train_target=X_target_train.astype(np.float32),
-        y_train_target=y_train_target,
+        y_train_target=y_target_train,
         x_val_target=None if X_target_val is None else X_target_val.astype(np.float32),
-        y_val_target=y_val_target,
+        y_val_target=y_target_val,
         x_test_target=X_target_test.astype(np.float32),
-        y_test_target=y_test_target,
+        y_test_target=y_target_test,
         X_target_independent=None,
         y_target_independent=None,
     )
