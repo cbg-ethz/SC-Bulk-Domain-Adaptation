@@ -20,12 +20,10 @@ conda env create -f environment.yaml
 ```
 
 This will create a conda environment named `benchmark` with all the necessary packages.
-PRECISE is installed from `NKI-CCB/PRECISE` with `--no-deps`, so the unrelated
-PyPI package named `precise` is not used and the benchmark environment keeps its
-pinned numpy/pandas/scikit-learn versions:
+PRECISE is installed from `NKI-CCB/PRECISE` with `--no-deps`, so the unrelated PyPI package named `precise` is not used and the benchmark environment keeps its pinned numpy/pandas/scikit-learn versions:
 
 ```bash
-pip install --no-deps -r requirements-precise.txt
+pip install --no-deps "git+https://github.com/NKI-CCB/PRECISE.git@f1b1399b85a229e65b2fb33a48d97c8b0ee4eec6"
 ```
 Additionally, you need a Weights & Biases (wandb) account. The section below explains a minimal configuration needed to run the `code/hyper_tuning.py` and `code/independent_evaluation.py` scripts.
 
