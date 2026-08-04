@@ -20,6 +20,7 @@ conda env create -f environment.yaml
 ```
 
 This will create a conda environment named `benchmark` with all the necessary packages.
+
 PRECISE is installed from `NKI-CCB/PRECISE` with `--no-deps`, so the unrelated PyPI package named `precise` is not used and the benchmark environment keeps its pinned numpy/pandas/scikit-learn versions:
 
 ```bash
