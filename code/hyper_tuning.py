@@ -313,7 +313,7 @@ def main():
     model_name = cli_args.model
 
     target_file_names = {
-        "Cisplatin": ["GSE117872_HN120","GSE117872_HN137", "GSE138267"], 
+        "Cisplatin": ["GSE117872_HN120","GSE117872_HN137", "GSE138267"],
         "Paclitaxel": ["GSE163836", "GSE131984"],
         "Ibrutinib": ["GSE111014"],
         "Dabrafenib": ["GSE164614"],
@@ -321,9 +321,9 @@ def main():
         "Vorinostat": ["JHU006"],
         "Etoposide": ["GSE149383_PC9"],
         "Erlotinib": ["GSE149383_PC9", "GSE149214"],
-        "Docetaxel": ["GSE140440_DU145", "GSE140440_PC3"], 
-        "Sorafenib":  ["SCC47", "GSE175716"], 
-        "Gefitinib": [ "JHU006", "GSE112274_PC9", "GSE162045_PC9", "GSE202234_H1975", "GSE202234_PC9"],  
+        "Docetaxel": ["GSE140440_DU145", "GSE140440_PC3"],
+        "Sorafenib":  ["SCC47", "GSE175716"],
+        "Gefitinib": [ "GSE202234_PC9", "GSE202234_H1975", "GSE162045_PC9", "GSE112274_PC9", "JHU006"],
         "Afatinib": ["SCC47", "GSE228154"], 
         "Alectinib": ["GSE223779"],
         "Crizotinib": ["GSE223779"],
@@ -572,6 +572,8 @@ def main():
                 elif model_name.startswith("CatBoost") and model_name != "CatBoost_fs":
                     # For CatBoost, we use the default parameter values as initial starting point
                     initial_params = {"depth": 6, "learning_rate": 0.03, "l2_leaf_reg": 3, "border_count": 254}
+                elif model_name == "Logistic_source_only":
+                    initial_params = {"C": 1.0, "l1_ratio": 0.5}
                 else:
                     initial_params = {}
 
