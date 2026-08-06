@@ -19,7 +19,7 @@ You can create the conda environment with the following command:
 conda env create -f environment.yaml
 ```
 
-This will create a conda environment named `benchmark` with all the necessary packages.
+This will create a conda environment named `benchmark` with all the necessary packages (~10 minutes installation time on normal desktop PCs).
 
 PRECISE is installed from `NKI-CCB/PRECISE` with `--no-deps`, so the unrelated PyPI package named `precise` is not used and the benchmark environment keeps its pinned numpy/pandas/scikit-learn versions:
 
@@ -44,11 +44,13 @@ The script takes the following arguments:
 - `--n_trials`: The number of Optuna trials.
 - `--model`: The name of the model to tune.
 
-For example, to run the hyperparameter tuning for the SCAD model on the drug SN-38 with 10 hyperparameter combinations (Optuna trials), you can run the following command:
+For example, to run the hyperparameter tuning for the scDEAL model on the drug SN-38 with 10 hyperparameter combinations (Optuna trials), you can run the following command:
 
 ```bash
-bash -c "conda activate benchmark && python code/hyper_tuning.py --drugs SN-38 --n_trials 10 --model SCAD"
+bash -c "conda activate benchmark && python code/hyper_tuning.py --drugs SN-38 --n_trials 10 --model scDEAL"
 ```
+
+On a CPU-only desktop PC, this 10-trial run wil take approximately 80 minutes. Note that only baseline models (logistic regression, catboost, PRECISE) and scDEAL will run with the demo dataset. scATD, SCAD, and SSDA4Drug require the full datasets to run due to their batch sizes.
 
 ## Directory Structure
 

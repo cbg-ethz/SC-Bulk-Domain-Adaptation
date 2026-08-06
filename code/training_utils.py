@@ -1423,11 +1423,6 @@ def run_catboost_benchmark(
         X_train, y_train = x_train_target, y_train_target
         # Since target validation set is removed, create a validation set from training data
         X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=seed, stratify=(y_train >= 0.5).astype(int))
-    elif model_type == "CatBoost_combined":
-        X_train = pd.concat([x_train_source, x_train_target])
-        y_train = pd.concat([y_train_source, y_train_target])
-        # Using source validation set for consistency.
-        X_val, y_val = x_val_source, y_val_source
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
 
