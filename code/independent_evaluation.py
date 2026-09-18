@@ -929,7 +929,7 @@ def main() -> None:
                     )
                     continue
 
-                run_name = f"{model_name}_{drug}_{target_tag}_to_{independent_tag}"
+                run_name = f"{model_name}_{drug}_{target_tag}_to_{independent_tag}_seed{SEED}"
                 wandb_config = _build_wandb_config(model_name, model_args, target_tag, independent_tag)
 
                 print(f"\n--- Evaluating {model_name} on {drug}::{target_tag} ---")
@@ -956,4 +956,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # ponytail: same 3 seeds as hyper_tuning.py (SEED + split - 1), run sequentially; slurm array over seeds if walltime matters
+    for SEED in (42, 43, 44):
+        main()
