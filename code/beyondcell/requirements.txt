@@ -1,0 +1,23 @@
+# Human-readable dependency list. The canonical, machine-installable
+# definition lives in environment.yml — install with:
+#
+#     conda env create -f environment.yml \
+#         --prefix /cluster/work/bewi/members/mesteban/miniconda3/envs/beyondcell
+#
+# Channels (priority order):
+#   bu_cnio       -- official BeyondCell channel (cnio-bu)
+#   conda-forge   -- base R, system libs, tidyverse helpers
+#   bioconda      -- single-cell ecosystem (Seurat is on conda-forge actually)
+#
+# R dependencies:
+#   r-base            >= 4.0, < 4.4    BeyondCell requires R >= 4.0
+#   r-beyondcell                       Drug-response scoring (BCS / TCs)
+#   r-seurat          >= 4.0           Single-cell container & analysis
+#   r-data.table                       Fast CSV I/O for the 1.8 GB expression CSVs
+#   r-optparse                         CLI arg parsing for per-pair script
+#   r-proc                             AUROC for validation against y_*.csv labels
+#   r-ggplot2                          Plots
+#   r-patchwork                        Plot composition
+#   r-matrix                           Sparse matrices
+#   r-rcolorbrewer                     Color scales
+#   r-jsonlite                         Persist per-pair metric summaries

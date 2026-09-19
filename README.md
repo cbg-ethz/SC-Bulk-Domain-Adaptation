@@ -74,15 +74,13 @@ The `code/` folder gathers data processing helpers, experiment orchestration scr
 
 ## Adding a New Benchmark Method
 
-To add another method to the benchmark:
+See [`code/adding_a_new_model.ipynb`](code/adding_a_new_model.ipynb) for a walkthrough with code snippets, using PRECISE as the example. In short:
 
-1. Add a new framework folder under `code/frameworks/<YourMethod>/` with a `main.py` entrypoint plus the model/data modules it needs (following the existing framework folders).
-2. Implement a `run_<yourmethod>_benchmark(...)` function in `code/training_utils.py` that trains/evaluates the method and returns metrics in the same structure as existing runners.
-3. Register the method in `code/hyper_tuning.py` by adding:
-   - an argument/default config container (`<YourMethod>Args`), and
-   - dispatch logic so Optuna calls your new benchmark runner.
-4. Register the method in `code/independent_evaluation.py` so it can be evaluated with the same preprocessing and independent-target setup.
-5. Reuse `code/data_utils.py` preprocessing helpers (gene mapping, normalization, splits) to keep comparisons fair and consistent across methods.
+0. Make the method importable: install it as a package (like PRECISE, see [Setup](#setup)) or add a folder under `code/frameworks/<YourMethod>/`.
+1. Understand the runner's inputs and outputs: `prepare_data` preprocesses the data identically for every method, and each runner returns the same metrics dictionary.
+2. Write `run_<yourmethod>_benchmark(...)` in `code/training_utils.py`, following the existing runners.
+3. Register the method in `code/hyper_tuning.py`: import the runner, add a `<YourMethod>Args` class, a search-space branch in `objective`, and `initial_params`.
+4. Smoke-test: `WANDB_MODE=offline python code/hyper_tuning.py --drugs SN-38 --n_trials 2 --model <YourMethod>`
 
 ## Downloading Data
 - To reproduce the results, you will need to download and unzip the processed datasets used in the paper into  `datasets/processed/`. The datasets can be downloaded from [Zenodo](https://zenodo.org/records/21236618).

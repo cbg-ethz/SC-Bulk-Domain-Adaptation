@@ -855,7 +855,7 @@ def main() -> None:
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["PRECISE"],#, , ,Logistic_fs "CatBoost_fs", "SCAD", "scDEAL", "SSDA4Drug", "scATD"], #"CatBoost_source_only"
+        default=["PRECISE", "Logistic_fs", "CatBoost_fs", "SCAD", "scDEAL", "SSDA4Drug", "scATD", "CatBoost_source_only"],
         help="Models to evaluate.",
     )
     parser.add_argument(
