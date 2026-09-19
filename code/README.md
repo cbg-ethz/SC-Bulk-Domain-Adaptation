@@ -45,3 +45,15 @@ This folder contains data preprocessing utilities, benchmark runners, hyperparam
 - `frameworks/scDeal/scDEAL_utils.py`: Utility functions carried from scDEAL workflows (feature selection, plotting, graph/clustering helpers).
 - `frameworks/scDeal/DaNN/mmd.py`: Original DaNN MMD implementations used by scDEAL adaptation.
 - `frameworks/scDeal/DaNN/loss.py`: Additional classic domain adaptation losses (DAN/JAN variants, entropy helper).
+
+## Supplementary analysis: `beyondcell/`
+
+This folder is a supplementary analysis and is not connected to the tuning benchmark. It does not use `hyper_tuning.py`, `training_utils.py` or W&B, and it runs in its own R environment.
+
+It applies [BeyondCell](https://github.com/cnio-bu/beyondcell) to the single-cell target datasets without any training. Each cell gets a BeyondCell Score for the drug it was treated with, and the score is compared with the binary sensitivity label (AUROC, AUPRC, MCC). Cisplatin and Palbociclib are missing from the SSc signature collection and are scored with the PSc collection instead.
+
+- `R/01_run_pair.R`: scores one (drug, dataset) pair. `scripts/submit_array.sh` runs all pairs as a SLURM array.
+- `R/02_aggregate.R`, `R/03_classification_metrics.R`, `R/04_figures.R`: summary tables, metrics and the figure (`make downstream`).
+- `R/05_mcc_comparison.py`: plots BeyondCell's mean MCC next to the benchmark models.
+
+See `beyondcell/README.md` for setup and usage.
