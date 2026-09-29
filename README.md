@@ -28,7 +28,7 @@ pip install --no-deps "git+https://github.com/NKI-CCB/PRECISE.git@f1b1399b85a229
 ```
 Additionally, you need a Weights & Biases (wandb) account. The section below explains a minimal configuration needed to run the `code/hyper_tuning.py` and `code/independent_evaluation.py` scripts.
 
-Furthermore, this repository only contains a small subset of one dataset for demonstration purposes. For replicating the results, you need to download and unzip the datasets used in the benchmark paper from [Zenodo](https://zenodo.org/records/21236618) into `datasets/processed/`.
+Furthermore, this repository only contains a small subset of one dataset for demonstration purposes. For replicating the results, you need to download and unzip the datasets used in the benchmark paper from [Zenodo](https://zenodo.org/records/21843088) into `datasets/processed/`.
 
 ### Weights & Biases Setup
 - The hyperparameter tuning script logs the results to Weights & Biases (wandb). 
@@ -83,7 +83,7 @@ See [`code/adding_a_new_model.ipynb`](code/adding_a_new_model.ipynb) for a walkt
 4. Smoke-test: `WANDB_MODE=offline python code/hyper_tuning.py --drugs SN-38 --n_trials 2 --model <YourMethod>`
 
 ## Downloading Data
-- To reproduce the results, you will need to download and unzip the processed datasets used in the paper into  `datasets/processed/`. The datasets can be downloaded from [Zenodo](https://zenodo.org/records/21236618).
+- To reproduce the results, you will need to download and unzip the processed datasets used in the paper into  `datasets/processed/`. The datasets can be downloaded from [Zenodo](https://zenodo.org/records/21843088).
 - To run scATD, the pre-trained model weights (file checkpoint_fold1_epoch_30.pth) need to be downloaded from figshare (https://figshare.com/articles/software/scATD/27908847) and placed in `code/frameworks/scATD/pretrained_models/`.
 - If the original URL of the pretrained scATD model doesn't work, we provide a copy of the model weights in the repository on [Zenodo](https://zenodo.org/records/21236618).
 
