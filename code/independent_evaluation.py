@@ -5,6 +5,7 @@ import os
 os.environ["SCIPY_ARRAY_API"] = "1"  # requested env var
 
 import argparse
+import re
 import sys
 import warnings
 from typing import Dict, Optional
@@ -201,13 +202,13 @@ class PreciseArgs:
 
 # Target datasets available per drug (mirrors hyperparameter tuning script)
 TARGET_FILE_NAMES: Dict[str, list[str]] = {
-    # "Cisplatin": ["GSE117872_HN120", "GSE117872_HN137", "GSE138267"],
-    "Paclitaxel": ["GSE131984", "GSE163836_FCIBC02"],
-    # "Docetaxel": ["GSE140440_PC3", "GSE140440_DU145"],
-    # "Sorafenib": ["SCC47", "GSE175716_HCC"],
-    # "Gefitinib": ["JHU006", "GSE112274_PC9", "GSE162045_PC9", "GSE202234_H1975", "GSE202234_PC9"],
-    # "Afatinib": ["GSE228154_LT", "SCC47"],
-    # "Erlotinib": ["GSE149214_D11_PC9", "GSE149383_PC9",]
+    "Cisplatin": ["GSE117872_HN120", "GSE117872_HN137", "GSE138267"],
+    "Paclitaxel": ["GSE131984", "GSE163836"],
+    "Docetaxel": ["GSE140440_PC3", "GSE140440_DU145"],
+    "Sorafenib": ["SCC47", "GSE175716"],
+    "Gefitinib": ["JHU006", "GSE112274_PC9", "GSE162045_PC9", "GSE202234_H1975", "GSE202234_PC9"],
+    "Afatinib": ["GSE228154", "SCC47"],
+    "Erlotinib": ["GSE149214", "GSE149383_PC9",]
 }
 
 
@@ -244,7 +245,14 @@ def _build_target_combinations() -> Dict[str, list[tuple[str, str]]]:
 DRUG_TARGETS = {drug: _unique_targets(tags) for drug, tags in TARGET_FILE_NAMES.items()}
 TARGET_COMBINATIONS = _build_target_combinations()
 TUNING_TARGET_ALIASES: Dict[tuple[str, str], str] = {
-    ("Erlotinib", "GSE149215_Erlo"): "GSE149214_D11_PC9",
+    # Normalize prior tuning labels to the processed-data filename stems above.
+    ("Afatinib", "GSE228154_LT"): "GSE228154",
+    ("Afatinib", "SCP542_Afat"): "SCC47",
+    ("Sorafenib", "GSE175716_HCC"): "GSE175716",
+    ("Sorafenib", "SCP542_Sora"): "SCC47",
+    ("Erlotinib", "GSE149214_D11_PC9"): "GSE149214",
+    ("Erlotinib", "GSE149215_Erlo"): "GSE149214",
+    ("Paclitaxel", "GSE163836_FCIBC02"): "GSE163836",
 }
 
 WANDB_TUNING_PROJECT_PATH = "bohl/hyper_tuning_expanded" # change to your own wandb project path
@@ -256,6 +264,12 @@ LOCAL_TUNING_CSV_PATH = os.path.abspath(
 # with the cast each value needs. Lets us pull config out of the flattened CSV, where
 # config and metric columns coexist, without dragging in logged metrics like input_dim.
 CSV_HYPERPARAM_KEYS: Dict[str, Dict[str, type]] = {
+    "CatBoost_source_only": {
+        "depth": int,
+        "learning_rate": float,
+        "l2_leaf_reg": float,
+        "border_count": int,
+    },
     "SCAD": {"lr": float, "dropout": float, "h_dim": int, "predictor_z_dim": int,
              "mbS": int, "mbT": int, "lam1": float, "binarize_source": bool},
     "SSDA4Drug": {"lr": float, "dropout": float, "encoder_h_dims": str,
@@ -847,8 +861,31 @@ def evaluate_model(
     raise ValueError(f"Unsupported model: {model_name}")
 
 
+def _completed_runs_from_log(log_path: str) -> set[tuple[str, str, str, str]]:
+    """Read successful model/target-pair results from a prior evaluation log."""
+    completed: set[tuple[str, str, str, str]] = set()
+    current_pair: Optional[tuple[str, str]] = None
+    with open(log_path, encoding="utf-8", errors="replace") as log_file:
+        for line in log_file:
+            pair_match = re.search(
+                r"--- Preparing data for target: (.+?) \| independent: (.+?) ---", line
+            )
+            if pair_match:
+                current_pair = (pair_match.group(1), pair_match.group(2))
+                continue
+            result_match = re.search(
+                r"^(\S+) results for ([^:]+)::(.+?):", line
+            )
+            if result_match and current_pair:
+                model_name, drug, target_tag = result_match.groups()
+                target_tag_from_pair, independent_tag = current_pair
+                if drug and target_tag == target_tag_from_pair:
+                    completed.add((drug, target_tag, independent_tag, model_name))
+    return completed
+
+
 def main() -> None:
-    global WANDB_TUNING_PROJECT_PATH, LOCAL_TUNING_CSV_PATH, MODEL_TARGET_HYPERS, _MODEL_TARGET_HYPERS_PATH  # pylint: disable=global-statement
+    global SEED, WANDB_TUNING_PROJECT_PATH, LOCAL_TUNING_CSV_PATH, MODEL_TARGET_HYPERS, _MODEL_TARGET_HYPERS_PATH  # pylint: disable=global-statement
     parser = argparse.ArgumentParser(
         description="Evaluate domain adaptation models on independent targets."
     )
@@ -863,6 +900,15 @@ def main() -> None:
         nargs="*",
         default=None,
         help="Optional subset of target dataset tags (applied across drugs).",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42, help="Single random seed for this evaluation run."
+    )
+    parser.add_argument(
+        "--skip-completed-from-log",
+        action="append",
+        default=[],
+        help="Skip successful model/target-pair results recorded in this log. Can be repeated.",
     )
     parser.add_argument(
         "--wandb-project",
@@ -882,6 +928,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    SEED = args.seed
     initialize_symbol_map(SYMBOL_ENSEMBL_MAP)
     set_seed(SEED)
 
@@ -898,6 +945,9 @@ def main() -> None:
         return
 
     requested_targets = set(args.targets) if args.targets else None
+    completed_runs: set[tuple[str, str, str, str]] = set()
+    for prior_log in args.skip_completed_from_log:
+        completed_runs.update(_completed_runs_from_log(prior_log))
     eligible_drugs = list(TARGET_COMBINATIONS.keys())
 
     if not eligible_drugs:
@@ -912,6 +962,16 @@ def main() -> None:
             if requested_targets and target_tag not in requested_targets:
                 continue
 
+            if all(
+                (drug, target_tag, independent_tag, model_name) in completed_runs
+                for model_name in args.models
+            ):
+                print(
+                    f"Skipping fully completed target pair "
+                    f"{drug}::{target_tag} -> {independent_tag}."
+                )
+                continue
+
             print(f"\n--- Preparing data for target: {target_tag} | independent: {independent_tag} ---")
             data_bundle = prepare_data(drug, target_tag, independent_tag, csv_files, DATA_DIR)
             if data_bundle is None:
@@ -919,6 +979,12 @@ def main() -> None:
                 continue
 
             for model_name in args.models:
+                if (drug, target_tag, independent_tag, model_name) in completed_runs:
+                    print(
+                        f"Skipping completed {model_name} on "
+                        f"{drug}::{target_tag} -> {independent_tag}."
+                    )
+                    continue
                 model_args = build_args(model_name, drug, target_tag)
                 if model_args is None:
                     available = sorted(hyper_lookup.get(drug, {}).get(target_tag, {}).keys())
@@ -956,6 +1022,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # ponytail: same 3 seeds as hyper_tuning.py (SEED + split - 1), run sequentially; slurm array over seeds if walltime matters
-    for SEED in (42, 43, 44):
-        main()
+    main()

@@ -6,9 +6,8 @@ import os
 import random
 import sys
 import warnings
-from collections import Counter
 from copy import deepcopy
-from typing import Any, Dict, List, Optional
+from typing import Dict, Optional
 import json
 
 # other imports
@@ -38,8 +37,6 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
-from typing import TYPE_CHECKING
-from sklearn.ensemble import RandomForestClassifier
 
 # Add project root to sys.path for framework imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -60,6 +57,10 @@ def _detect_catboost_task_type() -> str:
     Return 'GPU' when CatBoost sees at least one GPU, otherwise 'CPU'.
     Falls back to CPU if detection fails.
     """
+    requested_task_type = os.environ.get("CATBOOST_TASK_TYPE", "").strip().upper()
+    if requested_task_type in {"CPU", "GPU"}:
+        return requested_task_type
+
     try:
         from catboost.utils import get_gpu_device_count  # type: ignore
     except ImportError:  # pragma: no cover - optional helper
